@@ -6,7 +6,10 @@ use std::{
 use windows::{
     core::{w, Error as WindowsError, Result as WindowsResult, PWSTR},
     Win32::{
-        Foundation::{BOOL, HANDLE, INVALID_HANDLE_VALUE},
+        Foundation::{
+            SetHandleInformation, BOOL, HANDLE, HANDLE_FLAGS, HANDLE_FLAG_INHERIT,
+            INVALID_HANDLE_VALUE,
+        },
         Security::SECURITY_ATTRIBUTES,
         System::{
             Memory::{CreateFileMappingW, PAGE_READWRITE},
@@ -119,6 +122,21 @@ impl Launcher {
 
             info.assume_init()
         };
+
+        #[inline]
+        unsafe fn make_handle_uninheritable(handle: HANDLE) -> Result<()> {
+            if SetHandleInformation(handle, HANDLE_FLAG_INHERIT.0, HANDLE_FLAGS(0)) == false {
+                Err(Error::Windows(WindowsError::from_win32()))
+            } else {
+                Ok(())
+            }
+        }
+        unsafe {
+            make_handle_uninheritable(args.file)?;
+            make_handle_uninheritable(args.mutex)?;
+            make_handle_uninheritable(args.wait_event)?;
+            make_handle_uninheritable(args.signal_event)?;
+        }
 
         let channel = result_from_channel(Channel::create(args))?;
 
