@@ -8,6 +8,9 @@ use window::Window;
 mod render;
 use render::Renderer;
 
+mod channel;
+mod launch;
+
 pub struct WindowDispatch {
     renderer: Option<Renderer>,
     error: bool,
