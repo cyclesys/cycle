@@ -1,3 +1,4 @@
+use proc_macro2::Span;
 use syn::{
     braced, bracketed,
     ext::IdentExt,
@@ -14,7 +15,7 @@ mod kw {
     syn::custom_keyword!(rem);
 }
 
-pub struct Definition(Vec<DefinitionItem>);
+pub struct Definition(pub Vec<DefinitionItem>);
 
 impl Parse for Definition {
     fn parse(input: ParseStream) -> Result<Self> {
@@ -50,10 +51,14 @@ impl Parse for DefinitionItem {
     }
 }
 
-pub struct Version(Vec<VersionItem>);
+pub struct Version {
+    pub begin_span: Span,
+    pub items: Vec<VersionItem>,
+}
 
 impl Parse for Version {
     fn parse(input: ParseStream) -> Result<Self> {
+        let begin_span = input.span();
         let _: Token![#] = input.parse()?;
 
         let version_input;
@@ -66,36 +71,54 @@ impl Parse for Version {
             }
             items.push(version_input.parse()?);
         }
-        Ok(Self(items))
+        Ok(Self { begin_span, items })
     }
 }
 
-pub enum VersionItem {
-    Add(LitInt),
-    Rem(LitInt),
+pub struct VersionItem {
+    pub kw_span: Span,
+    pub kind: VersionItemKind,
+    pub num: LitInt,
+}
+
+#[derive(PartialEq, Eq)]
+pub enum VersionItemKind {
+    Add,
+    Rem,
 }
 
 impl Parse for VersionItem {
     fn parse(input: ParseStream) -> Result<Self> {
         let lookahead = input.lookahead1();
         if lookahead.peek(kw::add) {
+            let kw_span = input.span();
             let _: kw::add = input.parse()?;
 
             let add_input;
             parenthesized!(add_input in input);
 
-            let ver: LitInt = add_input.parse()?;
+            let num: LitInt = add_input.parse()?;
             expect_empty(&add_input)?;
-            Ok(Self::Add(ver))
+            Ok(Self {
+                kw_span,
+                kind: VersionItemKind::Add,
+                num,
+            })
         } else if lookahead.peek(kw::rem) {
+            let kw_span = input.span();
             let _: kw::rem = input.parse()?;
 
             let rem_input;
             parenthesized!(rem_input in input);
 
-            let ver: LitInt = rem_input.parse()?;
+            let num_span = rem_input.span();
+            let num = rem_input.parse()?;
             expect_empty(&rem_input)?;
-            Ok(Self::Rem(ver))
+            Ok(Self {
+                kw_span,
+                kind: VersionItemKind::Rem,
+                num,
+            })
         } else {
             Err(lookahead.error())
         }
@@ -103,8 +126,8 @@ impl Parse for VersionItem {
 }
 
 pub struct Struct {
-    name: Ident,
-    items: Vec<StructItem>,
+    pub name: Ident,
+    pub items: Vec<StructItem>,
 }
 
 impl Parse for Struct {
@@ -148,8 +171,8 @@ impl Parse for StructItem {
 }
 
 pub struct StructField {
-    name: Ident,
-    value: Value,
+    pub name: Ident,
+    pub value: Value,
 }
 
 impl Parse for StructField {
@@ -164,8 +187,8 @@ impl Parse for StructField {
 }
 
 pub struct Enum {
-    name: Ident,
-    items: Vec<EnumItem>,
+    pub name: Ident,
+    pub items: Vec<EnumItem>,
 }
 
 impl Parse for Enum {
@@ -203,27 +226,35 @@ impl Parse for EnumItem {
     }
 }
 
-pub enum EnumField {
-    Ident(Ident),
-    Int(Ident, LitInt),
-    Tuple(Ident, Vec<Value>),
-    Struct(Ident, Vec<StructField>),
+pub struct EnumField {
+    pub name: Ident,
+    pub value: EnumFieldValue,
+}
+
+pub enum EnumFieldValue {
+    Int(LitInt),
+    Struct(Vec<StructItem>),
+    Tuple(Vec<Value>),
+    None,
 }
 
 impl Parse for EnumField {
     fn parse(input: ParseStream) -> Result<Self> {
-        let ident = input.parse()?;
+        let name = input.parse()?;
 
         let result = if input.peek(Brace) {
             let struct_input;
             braced!(struct_input in input);
 
-            let mut fields = Vec::new();
+            let mut items = Vec::new();
             while !struct_input.is_empty() {
-                fields.push(struct_input.parse()?);
+                items.push(struct_input.parse()?);
             }
 
-            Ok(Self::Struct(ident, fields))
+            Ok(Self {
+                name,
+                value: EnumFieldValue::Struct(items),
+            })
         } else if input.peek(Paren) {
             let tuple_input;
             parenthesized!(tuple_input in input);
@@ -236,13 +267,22 @@ impl Parse for EnumField {
                 values.push(tuple_input.parse()?);
             }
 
-            Ok(Self::Tuple(ident, values))
+            Ok(Self {
+                name,
+                value: EnumFieldValue::Tuple(values),
+            })
         } else if input.peek(Token![=]) {
             let _: Token![=] = input.parse()?;
             let int = input.parse()?;
-            Ok(Self::Int(ident, int))
+            Ok(Self {
+                name,
+                value: EnumFieldValue::Int(int),
+            })
         } else {
-            Ok(Self::Ident(ident))
+            Ok(Self {
+                name,
+                value: EnumFieldValue::None,
+            })
         };
 
         let _: Token![,] = input.parse()?;
