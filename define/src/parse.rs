@@ -1,3 +1,5 @@
+use std::mem;
+
 use proc_macro2::Span;
 use syn::{
     braced, bracketed,
@@ -5,7 +7,7 @@ use syn::{
     parenthesized,
     parse::{Parse, ParseStream},
     token::{Brace, Bracket, Paren},
-    Ident, LitInt, Result, Token,
+    Error, Ident, LitInt, Result, Token,
 };
 
 mod kw {
@@ -15,357 +17,425 @@ mod kw {
     syn::custom_keyword!(rem);
 }
 
-pub struct Definition(pub Vec<DefinitionItem>);
+pub struct Definition(pub Vec<Type>);
 
 impl Parse for Definition {
     fn parse(input: ParseStream) -> Result<Self> {
-        let mut items = Vec::new();
+        let mut types = Vec::new();
+
+        let mut type_ver = VersionParse { version: None };
         while !input.is_empty() {
-            items.push(input.parse()?);
+            let lookahead = input.lookahead1();
+            if lookahead.peek(Token![#]) {
+                type_ver.parse(input, "type def (i.e. node, struct, or enum)")?;
+            } else if lookahead.peek(kw::node) {
+                types.push(Type::Node(Struct::parse(input, type_ver.consume())?));
+            } else if lookahead.peek(Token![struct]) {
+                types.push(Type::Struct(Struct::parse(input, type_ver.consume())?));
+            } else if lookahead.peek(Token![enum]) {
+                types.push(Type::Enum(Enum::parse(input, type_ver.consume())?));
+            } else {
+                return Err(lookahead.error());
+            }
         }
-        Ok(Self(items))
+
+        Ok(Self(types))
     }
 }
 
-pub enum DefinitionItem {
-    Version(Version),
+pub enum Type {
     Node(Struct),
     Struct(Struct),
     Enum(Enum),
 }
 
-impl Parse for DefinitionItem {
-    fn parse(input: ParseStream) -> Result<Self> {
-        let lookahead = input.lookahead1();
-        if lookahead.peek(Token![#]) {
-            Ok(Self::Version(input.parse()?))
-        } else if lookahead.peek(kw::node) {
-            Ok(Self::Node(input.parse()?))
-        } else if lookahead.peek(Token![struct]) {
-            Ok(Self::Struct(input.parse()?))
-        } else if lookahead.peek(Token![enum]) {
-            Ok(Self::Enum(input.parse()?))
-        } else {
-            Err(lookahead.error())
+struct VersionParse {
+    version: Option<Version>,
+}
+
+impl VersionParse {
+    fn parse(&mut self, input: ParseStream, expected: &str) -> Result<()> {
+        if self.version.is_some() {
+            return Err(input.error(format!("expected a {} after the version def", expected)));
         }
+        self.version = Some(Version::parse(input)?);
+        Ok(())
+    }
+
+    fn consume(&mut self) -> Option<Version> {
+        mem::replace(&mut self.version, None)
     }
 }
 
 pub struct Version {
-    pub begin_span: Span,
-    pub items: Vec<VersionItem>,
-}
-
-impl Parse for Version {
-    fn parse(input: ParseStream) -> Result<Self> {
-        let begin_span = input.span();
-        let _: Token![#] = input.parse()?;
-
-        let version_input;
-        bracketed!(version_input in input);
-
-        let mut items = Vec::new();
-        while !version_input.is_empty() {
-            if items.len() > 0 {
-                let _: Token![,] = version_input.parse()?;
-            }
-            items.push(version_input.parse()?);
-        }
-        Ok(Self { begin_span, items })
-    }
+    pub pound_span: Span,
+    pub added: Option<VersionItem>,
+    pub removed: Option<VersionItem>,
 }
 
 pub struct VersionItem {
     pub kw_span: Span,
-    pub kind: VersionItemKind,
-    pub num: LitInt,
+    pub num_span: Span,
+    pub num: u32,
 }
 
-#[derive(PartialEq, Eq)]
-pub enum VersionItemKind {
-    Add,
-    Rem,
-}
-
-impl Parse for VersionItem {
+impl Version {
     fn parse(input: ParseStream) -> Result<Self> {
-        let lookahead = input.lookahead1();
-        if lookahead.peek(kw::add) {
-            let kw_span = input.span();
-            let _: kw::add = input.parse()?;
+        let pound_tok: Token![#] = input.parse()?;
 
-            let add_input;
-            parenthesized!(add_input in input);
+        let inner_input;
+        bracketed!(inner_input in input);
+        let input = inner_input;
 
-            let num: LitInt = add_input.parse()?;
-            expect_empty(&add_input)?;
-            Ok(Self {
+        let parse_item = |kw_span: Span| -> Result<VersionItem> {
+            let inner_input;
+            parenthesized!(inner_input in input);
+            let input = inner_input;
+
+            let num_lit: LitInt = input.parse()?;
+            let num = parse_int(&num_lit, "invalid version literal")?;
+
+            expect_empty(&input)?;
+            Ok(VersionItem {
                 kw_span,
-                kind: VersionItemKind::Add,
+                num_span: num_lit.span(),
                 num,
             })
-        } else if lookahead.peek(kw::rem) {
-            let kw_span = input.span();
-            let _: kw::rem = input.parse()?;
+        };
 
-            let rem_input;
-            parenthesized!(rem_input in input);
+        let mut added: Option<VersionItem> = None;
+        let mut removed: Option<VersionItem> = None;
+        while !input.is_empty() {
+            if added.is_some() {
+                if removed.is_some() {
+                    return Err(Error::new(input.span(), "expected nothing here."));
+                }
 
-            let num_span = rem_input.span();
-            let num = rem_input.parse()?;
-            expect_empty(&rem_input)?;
-            Ok(Self {
-                kw_span,
-                kind: VersionItemKind::Rem,
-                num,
-            })
-        } else {
-            Err(lookahead.error())
+                let _: Token![,] = input.parse()?;
+
+                if input.peek(kw::rem) {
+                    let rem_kw: kw::rem = input.parse()?;
+                    removed = Some(parse_item(rem_kw.span)?);
+                } else {
+                    return Err(Error::new(
+                        input.span(),
+                        "expected a 'rem' specifier or nothing.",
+                    ));
+                }
+            } else if removed.is_some() {
+                return Err(Error::new(
+                    input.span(),
+                    if input.peek(Token![,]) && input.peek2(kw::add) {
+                        "'add' specifier must come before 'rem' specifier."
+                    } else {
+                        "expected nothing here."
+                    },
+                ));
+            } else {
+                let lookahead = input.lookahead1();
+                if lookahead.peek(kw::add) {
+                    let add_kw: kw::add = input.parse()?;
+                    added = Some(parse_item(add_kw.span)?);
+                } else if lookahead.peek(kw::rem) {
+                    let rem_kw: kw::rem = input.parse()?;
+                    removed = Some(parse_item(rem_kw.span)?);
+                }
+            }
         }
+
+        if added.is_none() && removed.is_none() {
+            return Err(Error::new(
+                pound_tok.span,
+                "version def must contain at least one of 'add' or 'rem'",
+            ));
+        }
+
+        Ok(Self {
+            pound_span: pound_tok.span,
+            added,
+            removed,
+        })
     }
 }
 
 pub struct Struct {
-    pub name: Ident,
-    pub items: Vec<StructItem>,
+    pub version: Option<Version>,
+    pub name_span: Span,
+    pub name: String,
+    pub fields: Vec<StructField>,
 }
 
-impl Parse for Struct {
-    fn parse(input: ParseStream) -> Result<Self> {
+impl Struct {
+    fn parse(input: ParseStream, version: Option<Version>) -> Result<Self> {
         if input.peek(Token![struct]) {
             let _: Token![struct] = input.parse()?;
         } else {
             let _: kw::node = input.parse()?;
         }
 
-        let name: Ident = input.parse()?;
+        let name_ident: Ident = input.parse()?;
 
-        let struct_input;
-        braced!(struct_input in input);
+        let inner_input;
+        braced!(inner_input in input);
+        let input = inner_input;
 
-        let mut items = Vec::new();
-        while !struct_input.is_empty() {
-            items.push(struct_input.parse()?);
-        }
+        let fields = Self::parse_fields(&input)?;
 
-        Ok(Self { name, items })
+        Ok(Self {
+            version,
+            name_span: name_ident.span(),
+            name: name_ident.to_string(),
+            fields,
+        })
     }
-}
 
-pub enum StructItem {
-    Version(Version),
-    Field(StructField),
-}
+    fn parse_fields(input: ParseStream) -> Result<Vec<StructField>> {
+        let mut fields = Vec::new();
 
-impl Parse for StructItem {
-    fn parse(input: ParseStream) -> Result<Self> {
-        let lookahead = input.lookahead1();
-        if lookahead.peek(Token![#]) {
-            Ok(Self::Version(input.parse()?))
-        } else if lookahead.peek(Ident::peek_any) {
-            Ok(Self::Field(input.parse()?))
-        } else {
-            Err(lookahead.error())
+        let mut field_ver = VersionParse { version: None };
+        while !input.is_empty() {
+            let lookahead = input.lookahead1();
+            if lookahead.peek(Token![#]) {
+                field_ver.parse(&input, "struct field")?;
+            } else if lookahead.peek(Ident::peek_any) {
+                fields.push(StructField::parse(&input, field_ver.consume())?);
+            } else {
+                return Err(lookahead.error());
+            }
         }
+
+        Ok(fields)
     }
 }
 
 pub struct StructField {
-    pub name: Ident,
+    pub version: Option<Version>,
+    pub name_span: Span,
+    pub name: String,
     pub value: Value,
 }
 
-impl Parse for StructField {
-    fn parse(input: ParseStream) -> Result<Self> {
-        let name = input.parse()?;
+impl StructField {
+    fn parse(input: ParseStream, version: Option<Version>) -> Result<Self> {
+        let name_ident: Ident = input.parse()?;
         let _: Token![:] = input.parse()?;
-        let value = input.parse()?;
+        let value = Value::parse(input)?;
         let _: Token![,] = input.parse()?;
 
-        Ok(Self { name, value })
+        Ok(Self {
+            version,
+            name_span: name_ident.span(),
+            name: name_ident.to_string(),
+            value,
+        })
     }
 }
 
 pub struct Enum {
-    pub name: Ident,
-    pub items: Vec<EnumItem>,
+    pub version: Option<Version>,
+    pub name_span: Span,
+    pub name: String,
+    pub fields: Vec<EnumField>,
 }
 
-impl Parse for Enum {
-    fn parse(input: ParseStream) -> Result<Self> {
+impl Enum {
+    fn parse(input: ParseStream, version: Option<Version>) -> Result<Self> {
         let _: Token![enum] = input.parse()?;
-        let name = input.parse()?;
+        let name_ident: Ident = input.parse()?;
 
-        let enum_input;
-        braced!(enum_input in input);
+        let inner_input;
+        braced!(inner_input in input);
+        let input = inner_input;
 
-        let mut items = Vec::new();
-        while !enum_input.is_empty() {
-            items.push(enum_input.parse()?);
+        let mut fields = Vec::new();
+
+        let mut field_ver = VersionParse { version: None };
+        while !input.is_empty() {
+            let lookahead = input.lookahead1();
+            if lookahead.peek(Token![#]) {
+                field_ver.parse(&input, "enum field")?;
+            } else if lookahead.peek(Ident::peek_any) {
+                fields.push(EnumField::parse(&input, field_ver.consume())?);
+            } else {
+                return Err(lookahead.error());
+            }
         }
 
-        Ok(Self { name, items })
-    }
-}
-
-pub enum EnumItem {
-    Version(Version),
-    Field(EnumField),
-}
-
-impl Parse for EnumItem {
-    fn parse(input: ParseStream) -> Result<Self> {
-        let lookahead = input.lookahead1();
-        if lookahead.peek(Token![#]) {
-            Ok(Self::Version(input.parse()?))
-        } else if lookahead.peek(Ident::peek_any) {
-            Ok(Self::Field(input.parse()?))
-        } else {
-            Err(lookahead.error())
-        }
+        Ok(Self {
+            version,
+            name_span: name_ident.span(),
+            name: name_ident.to_string(),
+            fields,
+        })
     }
 }
 
 pub struct EnumField {
-    pub name: Ident,
+    pub version: Option<Version>,
+    pub name_span: Span,
+    pub name: String,
     pub value: EnumFieldValue,
 }
 
 pub enum EnumFieldValue {
-    Int(LitInt),
-    Struct(Vec<StructItem>),
+    Int { num_span: Span, num: u32 },
+    Struct(Vec<StructField>),
     Tuple(Vec<Value>),
     None,
 }
 
-impl Parse for EnumField {
-    fn parse(input: ParseStream) -> Result<Self> {
-        let name = input.parse()?;
+impl EnumField {
+    fn parse(input: ParseStream, version: Option<Version>) -> Result<Self> {
+        let name_ident: Ident = input.parse()?;
 
-        let result = if input.peek(Brace) {
-            let struct_input;
-            braced!(struct_input in input);
+        let value = if input.peek(Brace) {
+            let inner_input;
+            braced!(inner_input in input);
+            let input = inner_input;
 
-            let mut items = Vec::new();
-            while !struct_input.is_empty() {
-                items.push(struct_input.parse()?);
-            }
-
-            Ok(Self {
-                name,
-                value: EnumFieldValue::Struct(items),
-            })
+            let fields = Struct::parse_fields(&input)?;
+            EnumFieldValue::Struct(fields)
         } else if input.peek(Paren) {
-            let tuple_input;
-            parenthesized!(tuple_input in input);
-
-            let mut values = Vec::new();
-            while !tuple_input.is_empty() {
-                if values.len() > 0 {
-                    let _: Token![,] = tuple_input.parse()?;
-                }
-                values.push(tuple_input.parse()?);
-            }
-
-            Ok(Self {
-                name,
-                value: EnumFieldValue::Tuple(values),
-            })
+            let values = Value::parse_tuple(input)?;
+            EnumFieldValue::Tuple(values)
         } else if input.peek(Token![=]) {
             let _: Token![=] = input.parse()?;
-            let int = input.parse()?;
-            Ok(Self {
-                name,
-                value: EnumFieldValue::Int(int),
-            })
+            let num_lit: LitInt = input.parse()?;
+            let num = parse_int(&num_lit, "invalid enum int literal")?;
+            EnumFieldValue::Int {
+                num_span: num_lit.span(),
+                num,
+            }
         } else {
-            Ok(Self {
-                name,
-                value: EnumFieldValue::None,
-            })
+            EnumFieldValue::None
         };
 
         let _: Token![,] = input.parse()?;
-        result
+
+        Ok(Self {
+            version,
+            name_span: name_ident.span(),
+            name: name_ident.to_string(),
+            value,
+        })
     }
 }
 
 pub enum Value {
-    Ident(ValueIdent),
-    Array(Box<Value>, LitInt),
+    Composite(String),
+    Optional(Box<Value>),
+    Reference(Box<Value>),
+    Array(Box<Value>, u32),
     Slice(Box<Value>),
     Tuple(Vec<Value>),
+    Primitive(Primitive),
 }
 
-impl Parse for Value {
+pub enum Primitive {
+    Int8,
+    Int16,
+    Int32,
+    Int64,
+
+    UInt8,
+    UInt16,
+    UInt32,
+    UInt64,
+
+    Float32,
+    Float64,
+
+    Boolean,
+    String,
+}
+
+impl Value {
     fn parse(input: ParseStream) -> Result<Self> {
+        fn parse_wrapped(input: ParseStream) -> Result<Value> {
+            let _: Token![<] = input.parse()?;
+            let value = Value::parse(input)?;
+            let _: Token![>] = input.parse()?;
+            Ok(value)
+        }
+
         let lookahead = input.lookahead1();
-        if lookahead.peek(Bracket) {
-            let array_input;
-            bracketed!(array_input in input);
+        let result = if lookahead.peek(Bracket) {
+            let inner_input;
+            bracketed!(inner_input in input);
+            let input = inner_input;
 
-            let value: Value = array_input.parse()?;
-            if !array_input.is_empty() {
-                let _: Token![;] = array_input.parse()?;
-                let size: LitInt = array_input.parse()?;
+            let value = Value::parse(&input)?;
+            if !input.is_empty() {
+                let _: Token![;] = input.parse()?;
+                let size: LitInt = input.parse()?;
+                expect_empty(&input)?;
 
-                Ok(Self::Array(Box::from(value), size))
+                Self::Array(
+                    Box::new(value),
+                    parse_int(&size, "invalid array size literal")?,
+                )
             } else {
-                Ok(Self::Slice(Box::from(value)))
+                Self::Slice(Box::from(value))
             }
         } else if lookahead.peek(Paren) {
-            let tuple_input;
-            parenthesized!(tuple_input in input);
-
-            let mut values = Vec::new();
-            while !tuple_input.is_empty() {
-                if values.len() > 0 {
-                    let _: Token![,] = tuple_input.parse()?;
-                }
-                values.push(tuple_input.parse()?);
-            }
-
-            Ok(Self::Tuple(values))
+            let values = Self::parse_tuple(input)?;
+            Self::Tuple(values)
         } else if lookahead.peek(Ident::peek_any) {
-            Ok(Self::Ident(input.parse()?))
+            if input.peek(Token![ref]) {
+                let _: Token![ref] = input.parse()?;
+                let value = parse_wrapped(input)?;
+                Self::Reference(Box::new(value))
+            } else {
+                let ident: Ident = input.parse()?;
+                let name = ident.to_string();
+                match name.as_str() {
+                    "i8" => Self::Primitive(Primitive::Int8),
+                    "i16" => Self::Primitive(Primitive::Int16),
+                    "i32" => Self::Primitive(Primitive::Int32),
+                    "i64" => Self::Primitive(Primitive::Int64),
+                    "u8" => Self::Primitive(Primitive::UInt8),
+                    "u16" => Self::Primitive(Primitive::UInt16),
+                    "u32" => Self::Primitive(Primitive::UInt32),
+                    "u64" => Self::Primitive(Primitive::UInt64),
+                    "f32" => Self::Primitive(Primitive::Float32),
+                    "f64" => Self::Primitive(Primitive::Float64),
+                    "bool" => Self::Primitive(Primitive::Boolean),
+                    "str" => Self::Primitive(Primitive::String),
+                    "opt" => {
+                        let value = parse_wrapped(input)?;
+                        Self::Optional(Box::new(value))
+                    }
+                    _ => Self::Composite(name),
+                }
+            }
         } else {
-            Err(lookahead.error())
+            return Err(lookahead.error());
+        };
+
+        Ok(result)
+    }
+
+    fn parse_tuple(input: ParseStream) -> Result<Vec<Value>> {
+        let inner_input;
+        parenthesized!(inner_input in input);
+        let input = inner_input;
+
+        let mut values = Vec::new();
+        while !input.is_empty() {
+            if values.len() > 0 {
+                let _: Token![,] = input.parse()?;
+            }
+            values.push(Self::parse(&input)?);
         }
+
+        Ok(values)
     }
 }
 
-pub enum ValueIdent {
-    Ident(Ident),
-    // `ref` is a keyword in rust, which means syn treats it as a keyword and not an identifier,
-    // thus we can't use Self::Wrapper for `ref<type>` values like we can for `opt<type>`.
-    Ref(Box<Value>),
-    Wrapper(Ident, Box<Value>),
-}
-
-impl Parse for ValueIdent {
-    fn parse(input: ParseStream) -> Result<Self> {
-        let ident: Option<Ident> = if input.peek(Token![ref]) {
-            let _: Token![ref] = input.parse()?;
-            None
-        } else {
-            Some(input.parse()?)
-        };
-
-        if input.peek(Token![<]) {
-            let _: Token![<] = input.parse()?;
-            let value: Value = input.parse()?;
-            let _: Token![>] = input.parse()?;
-
-            match ident {
-                Some(ident) => Ok(Self::Wrapper(ident, Box::from(value))),
-                None => Ok(Self::Ref(Box::from(value))),
-            }
-        } else {
-            match ident {
-                Some(ident) => Ok(Self::Ident(ident)),
-                None => Err(input.error("expected a <type> specifier for ref")),
-            }
-        }
+fn parse_int(int_lit: &LitInt, msg: &str) -> Result<u32> {
+    match u32::from_str_radix(&int_lit.to_string(), 10) {
+        Ok(int) => Ok(int),
+        Err(_) => Err(Error::new(int_lit.span(), msg)),
     }
 }
 
