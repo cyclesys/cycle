@@ -64,7 +64,10 @@ fn define_test() {
 
         enum TagEnum {
             Tag1 {
+                #[rem(2)]
                 f1: bool,
+
+                #[add(2)]
                 f2: str,
             },
             Tag2(u8, u8),
