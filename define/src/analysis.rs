@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use proc_macro2::Span;
 use syn::{Error, Result};
 
 use crate::parse::{
@@ -70,6 +70,7 @@ impl<'a> Analyzer<'a> {
                     self.add_enum(type_index, enum_def)?;
                 }
             }
+            self.check_type_name(type_index)?;
         }
 
         Ok(())
@@ -369,5 +370,100 @@ impl<'a> Analyzer<'a> {
                 None => Ok((1, None)),
             },
         }
+    }
+
+    fn check_type_name(&mut self, type_index: usize) -> Result<()> {
+        let type_info = |index| match &self.type_defs[index] {
+            Type::Node(node_def) => (
+                node_def.version.as_ref(),
+                &node_def.name,
+                node_def.name_span,
+            ),
+            Type::Struct(struct_def) => (
+                struct_def.version.as_ref(),
+                &struct_def.name,
+                struct_def.name_span,
+            ),
+            Type::Enum(enum_def) => (
+                enum_def.version.as_ref(),
+                &enum_def.name,
+                enum_def.name_span,
+            ),
+        };
+
+        let (type_ver, type_name, type_name_span) = type_info(type_index);
+        for i in 0..type_index {
+            let (prev_type_ver, prev_type_name, _) = type_info(i);
+            if type_name == prev_type_name {
+                Self::check_overlap(type_ver, prev_type_ver, type_name_span)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn check_overlap(
+        left: Option<&Version>,
+        right: Option<&Version>,
+        name_span: Span,
+    ) -> Result<()> {
+        let error = || {
+            Err(Error::new(name_span, "type overlaps with a previously defined type. Types that share the same name must exist in different versions"))
+        };
+
+        if left.is_none() || right.is_none() {
+            return error();
+        }
+
+        let left = left.unwrap();
+        let right = right.unwrap();
+
+        let check_overlap_inner = |added_first: &Version, added_after: &VersionItem| {
+            match added_first.removed.as_ref() {
+                Some(added_first_removed) => {
+                    if added_after.num < added_first_removed.num {
+                        return error();
+                    }
+                }
+                None => {
+                    return error();
+                }
+            }
+
+            Ok(())
+        };
+
+        match left.added.as_ref() {
+            Some(left_added) => match right.added.as_ref() {
+                Some(right_added) => {
+                    if left_added.num < right_added.num {
+                        check_overlap_inner(left, right_added)?;
+                    } else if right_added.num < left_added.num {
+                        check_overlap_inner(right, left_added)?;
+                    } else {
+                        return error();
+                    }
+                }
+                None => {
+                    if left_added.num == 1 {
+                        return error();
+                    }
+                    check_overlap_inner(right, left_added)?;
+                }
+            },
+            None => match right.added.as_ref() {
+                Some(right_added) => {
+                    if right_added.num == 1 {
+                        return error();
+                    }
+                    check_overlap_inner(left, right_added)?;
+                }
+                None => {
+                    return error();
+                }
+            },
+        }
+
+        Ok(())
     }
 }
