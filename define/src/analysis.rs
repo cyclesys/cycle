@@ -70,13 +70,30 @@ impl<'a> Analyzer<'a> {
                     self.add_enum(type_index, enum_def)?;
                 }
             }
-            self.check_type_name(type_index)?;
+
+            Self::check_name_repeat(type_index, |index| match &self.type_defs[index] {
+                Type::Node(node_def) => (
+                    node_def.version.as_ref(),
+                    &node_def.name,
+                    &node_def.name_span,
+                ),
+                Type::Struct(struct_def) => (
+                    struct_def.version.as_ref(),
+                    &struct_def.name,
+                    &struct_def.name_span,
+                ),
+                Type::Enum(enum_def) => (
+                    enum_def.version.as_ref(),
+                    &enum_def.name,
+                    &enum_def.name_span,
+                ),
+            })?;
         }
 
         Ok(())
     }
 
-    fn add_struct(&mut self, struct_index: usize, struct_def: &Struct) -> Result<()> {
+    fn add_struct(&mut self, struct_index: usize, struct_def: &'a Struct) -> Result<()> {
         let (struct_add, struct_rem) = self.add_type(struct_index, struct_def.version.as_ref())?;
         for field_index in 0..struct_def.fields.len() {
             let field_def = &struct_def.fields[field_index];
@@ -86,11 +103,20 @@ impl<'a> Analyzer<'a> {
                 (struct_add, struct_rem),
                 false,
             )?;
+
+            Self::check_name_repeat(field_index, |index| {
+                let field_def = &struct_def.fields[index];
+                (
+                    field_def.version.as_ref(),
+                    &field_def.name,
+                    &field_def.name_span,
+                )
+            })?;
         }
         Ok(())
     }
 
-    fn add_enum(&mut self, enum_index: usize, enum_def: &Enum) -> Result<()> {
+    fn add_enum(&mut self, enum_index: usize, enum_def: &'a Enum) -> Result<()> {
         let (enum_add, enum_rem) = self.add_type(enum_index, enum_def.version.as_ref())?;
 
         #[derive(PartialEq, Eq)]
@@ -100,95 +126,112 @@ impl<'a> Analyzer<'a> {
             None,
         }
         let mut variant = Variant::None;
-        let mut check_variant = |new_variant, span| {
-            if variant == Variant::None {
-                variant = new_variant;
-            } else if variant != new_variant {
-                return Err(Error::new(
-                    span,
-                    "Enums cannot have variants with both integer values, and tuple or struct values",
-                ));
-            }
-
-            Ok(())
-        };
 
         for field_index in 0..enum_def.fields.len() {
             let field_def = &enum_def.fields[field_index];
 
-            if let EnumFieldValue::Struct(ref struct_fields) = field_def.value {
-                check_variant(Variant::StructOrTuple, field_def.name_span)?;
+            let mut check_variant = |new_variant| {
+                if variant == Variant::None {
+                    variant = new_variant;
+                } else if variant != new_variant {
+                    return Err(Error::new(
+                        field_def.name_span,
+                        "Enums cannot have variants with both integer values, and tuple or struct values",
+                    ));
+                }
+
+                Ok(())
+            };
+
+            let mut add_field = |is_struct_field| -> Result<(u32, Option<u32>)> {
                 let (field_add, field_rem) = self.add_field(
                     field_index,
                     field_def.version.as_ref(),
                     (enum_add, enum_rem),
-                    true,
+                    is_struct_field,
                 )?;
+                Self::check_name_repeat(field_index, |index| {
+                    let field_def = &enum_def.fields[index];
+                    (
+                        field_def.version.as_ref(),
+                        &field_def.name,
+                        &field_def.name_span,
+                    )
+                })?;
+                Ok((field_add, field_rem))
+            };
 
-                for struct_field_index in 0..struct_fields.len() {
-                    let struct_field_def = &struct_fields[struct_field_index];
-                    let (struct_field_add, struct_field_rem) = Self::check_version(
-                        struct_field_def.version.as_ref(),
-                        Some((field_add, field_rem)),
-                    )?;
+            match field_def.value {
+                EnumFieldValue::Struct(ref struct_fields) => {
+                    check_variant(Variant::StructOrTuple)?;
+                    let (field_add, field_rem) = add_field(true)?;
+                    for struct_field_index in 0..struct_fields.len() {
+                        let struct_field_def = &struct_fields[struct_field_index];
+                        let (struct_field_add, struct_field_rem) = Self::check_version(
+                            struct_field_def.version.as_ref(),
+                            Some((field_add, field_rem)),
+                        )?;
+                        Self::check_name_repeat(struct_field_index, |index| {
+                            let struct_field_def = &struct_fields[index];
+                            (
+                                struct_field_def.version.as_ref(),
+                                &struct_field_def.name,
+                                &struct_field_def.name_span,
+                            )
+                        })?;
 
-                    let begin = (struct_field_add - 1) as usize;
-                    let end = match struct_field_rem {
-                        Some(struct_field_rem) => {
-                            while self.modules.len() < (struct_field_rem as usize) {
-                                self.push_new_module();
+                        let begin = (struct_field_add - 1) as usize;
+                        let end = match struct_field_rem {
+                            Some(struct_field_rem) => {
+                                while self.modules.len() < (struct_field_rem as usize) {
+                                    self.push_new_module();
+                                }
+                                (struct_field_rem - 1) as usize
                             }
-                            (struct_field_rem - 1) as usize
-                        }
-                        None => {
-                            let field_index =
-                                self.current.last_mut().unwrap().fields.last_mut().unwrap();
-                            let FieldIndex::EnumStruct(_, struct_field_indices) = field_index else {
-                                unreachable!();
-                            };
-                            struct_field_indices.push(struct_field_index);
+                            None => {
+                                let field_index =
+                                    self.current.last_mut().unwrap().fields.last_mut().unwrap();
+                                let FieldIndex::EnumStruct(_, struct_field_indices) = field_index else {
+                                    unreachable!();
+                                };
+                                struct_field_indices.push(struct_field_index);
 
-                            while self.modules.len() < (struct_field_add as usize) {
-                                self.push_new_module();
+                                while self.modules.len() < (struct_field_add as usize) {
+                                    self.push_new_module();
+                                }
+
+                                self.modules.len()
                             }
-
-                            self.modules.len()
-                        }
-                    };
-
-                    for i in begin..end {
-                        let field_index = self.modules[i]
-                            .types
-                            .last_mut()
-                            .unwrap()
-                            .fields
-                            .last_mut()
-                            .unwrap();
-
-                        let FieldIndex::EnumStruct(_, ref mut indices) = field_index else {
-                            unreachable!();
                         };
 
-                        indices.push(struct_field_index);
-                    }
-                }
-            } else {
-                match field_def.value {
-                    EnumFieldValue::Int { num_span, .. } => {
-                        check_variant(Variant::Int, num_span)?;
-                    }
-                    EnumFieldValue::Tuple(_) => {
-                        check_variant(Variant::StructOrTuple, field_def.name_span)?;
-                    }
-                    _ => {}
-                }
+                        for i in begin..end {
+                            let field_index = self.modules[i]
+                                .types
+                                .last_mut()
+                                .unwrap()
+                                .fields
+                                .last_mut()
+                                .unwrap();
 
-                self.add_field(
-                    field_index,
-                    field_def.version.as_ref(),
-                    (enum_add, enum_rem),
-                    false,
-                )?;
+                            let FieldIndex::EnumStruct(_, ref mut indices) = field_index else {
+                                unreachable!();
+                            };
+
+                            indices.push(struct_field_index);
+                        }
+                    }
+                }
+                EnumFieldValue::Int { .. } => {
+                    check_variant(Variant::Int)?;
+                    add_field(false)?;
+                }
+                EnumFieldValue::Tuple(_) => {
+                    check_variant(Variant::StructOrTuple)?;
+                    add_field(false)?;
+                }
+                EnumFieldValue::None => {
+                    add_field(false)?;
+                }
             }
         }
 
@@ -372,43 +415,27 @@ impl<'a> Analyzer<'a> {
         }
     }
 
-    fn check_type_name(&mut self, type_index: usize) -> Result<()> {
-        let type_info = |index| match &self.type_defs[index] {
-            Type::Node(node_def) => (
-                node_def.version.as_ref(),
-                &node_def.name,
-                node_def.name_span,
-            ),
-            Type::Struct(struct_def) => (
-                struct_def.version.as_ref(),
-                &struct_def.name,
-                struct_def.name_span,
-            ),
-            Type::Enum(enum_def) => (
-                enum_def.version.as_ref(),
-                &enum_def.name,
-                enum_def.name_span,
-            ),
-        };
-
-        let (type_ver, type_name, type_name_span) = type_info(type_index);
-        for i in 0..type_index {
-            let (prev_type_ver, prev_type_name, _) = type_info(i);
-            if type_name == prev_type_name {
-                Self::check_overlap(type_ver, prev_type_ver, type_name_span)?;
+    fn check_name_repeat(
+        item_index: usize,
+        item_at: impl Fn(usize) -> (Option<&'a Version>, &'a String, &'a Span),
+    ) -> Result<()> {
+        let (item_ver, item_name, item_name_span) = item_at(item_index);
+        for i in 0..item_index {
+            let (prev_item_ver, prev_item_name, _) = item_at(i);
+            if prev_item_name == item_name {
+                Self::check_version_overlap(prev_item_ver, item_ver, item_name_span)?;
             }
         }
-
         Ok(())
     }
 
-    fn check_overlap(
+    fn check_version_overlap(
         left: Option<&Version>,
         right: Option<&Version>,
-        name_span: Span,
+        name_span: &Span,
     ) -> Result<()> {
         let error = || {
-            Err(Error::new(name_span, "type overlaps with a previously defined type. Types that share the same name must exist in different versions"))
+            Err(Error::new(*name_span, "type overlaps with a previously defined type. Types that share the same name must exist in different versions"))
         };
 
         if left.is_none() || right.is_none() {
@@ -418,7 +445,7 @@ impl<'a> Analyzer<'a> {
         let left = left.unwrap();
         let right = right.unwrap();
 
-        let check_overlap_inner = |added_first: &Version, added_after: &VersionItem| {
+        let check_version_overlap_inner = |added_first: &Version, added_after: &VersionItem| {
             match added_first.removed.as_ref() {
                 Some(added_first_removed) => {
                     if added_after.num < added_first_removed.num {
@@ -437,9 +464,9 @@ impl<'a> Analyzer<'a> {
             Some(left_added) => match right.added.as_ref() {
                 Some(right_added) => {
                     if left_added.num < right_added.num {
-                        check_overlap_inner(left, right_added)?;
+                        check_version_overlap_inner(left, right_added)?;
                     } else if right_added.num < left_added.num {
-                        check_overlap_inner(right, left_added)?;
+                        check_version_overlap_inner(right, left_added)?;
                     } else {
                         return error();
                     }
@@ -448,7 +475,7 @@ impl<'a> Analyzer<'a> {
                     if left_added.num == 1 {
                         return error();
                     }
-                    check_overlap_inner(right, left_added)?;
+                    check_version_overlap_inner(right, left_added)?;
                 }
             },
             None => match right.added.as_ref() {
@@ -456,7 +483,7 @@ impl<'a> Analyzer<'a> {
                     if right_added.num == 1 {
                         return error();
                     }
-                    check_overlap_inner(left, right_added)?;
+                    check_version_overlap_inner(left, right_added)?;
                 }
                 None => {
                     return error();
