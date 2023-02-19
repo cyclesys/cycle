@@ -349,6 +349,13 @@ impl<'a> Analyzer<'a> {
                 Some(container_version) => {
                     let added = match version.added {
                         Some(ref added) => {
+                            if added.num < 1 {
+                                return Err(Error::new(
+                                    added.num_span,
+                                    "add value must be at least 1",
+                                ));
+                            }
+
                             if added.num < container_version.0 {
                                 return Err(Error::new(
                                     added.num_span,
@@ -372,6 +379,13 @@ impl<'a> Analyzer<'a> {
 
                     let removed = match version.removed {
                         Some(ref removed) => {
+                            if removed.num < 2 {
+                                return Err(Error::new(
+                                    removed.num_span,
+                                    "rem value must be at least 2",
+                                ));
+                            }
+
                             ensure_rem_greater_than_add(added, removed)?;
 
                             if removed.num <= container_version.0 {
