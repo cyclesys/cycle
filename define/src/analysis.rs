@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use syn::{Error, Result};
 
 use crate::parse::{
-    Enum, EnumField, EnumFieldValue, Struct, StructField, Type, Value, ValueType, Version,
-    VersionItem,
+    Enum, EnumField, EnumFieldValue, Primitive, Struct, StructField, Type, Value, ValueType,
+    Version, VersionItem,
 };
 
 pub struct Module {
@@ -647,10 +647,19 @@ impl<'a> Analyzer<'a> {
 
             fn check_value(&mut self, value: &'a Value, expects_node: bool) -> Result<()> {
                 if expects_node {
-                    if let ValueType::Composite(name) = &value.value_type {
-                        self.check_name_used(name.as_str(), &value.span, true)?;
-                    } else {
-                        return Err(Error::new(value.span, "expected node type"));
+                    let error = || Err(Error::new(value.span, "expected node type"));
+                    match &value.value_type {
+                        ValueType::Composite(name) => {
+                            self.check_name_used(name.as_str(), &value.span, true)?;
+                        }
+                        ValueType::Primitive(primitive) => {
+                            if *primitive != Primitive::Any {
+                                return error();
+                            }
+                        }
+                        _ => {
+                            return error();
+                        }
                     }
                 } else {
                     match &value.value_type {
@@ -674,7 +683,14 @@ impl<'a> Analyzer<'a> {
                                 self.check_value(value, false)?;
                             }
                         }
-                        ValueType::Primitive(_) => {}
+                        ValueType::Primitive(primitive) => {
+                            if *primitive == Primitive::Any {
+                                return Err(Error::new(
+                                    value.span,
+                                    "any types must be enclosed by a ref type",
+                                ));
+                            }
+                        }
                     }
                 }
                 Ok(())
@@ -709,6 +725,15 @@ impl<'a> Analyzer<'a> {
                         state.check_name_found(enum_def.name.as_str(), false)?;
                         state.check_enum_fields(type_index, enum_def)?;
                     }
+                }
+            }
+
+            for type_name_state in state.type_names.values() {
+                if let TypeNameState::Used { name_span, .. } = *type_name_state {
+                    return Err(Error::new(
+                        *name_span,
+                        format!("type does not exist in version {}", mi + 1),
+                    ));
                 }
             }
             state.type_names.clear();

@@ -325,6 +325,7 @@ pub struct Value {
     pub span: Span,
     pub value_type: ValueType,
 }
+
 pub enum ValueType {
     Composite(String),
     Optional(Box<Value>),
@@ -335,6 +336,7 @@ pub enum ValueType {
     Primitive(Primitive),
 }
 
+#[derive(PartialEq, Eq)]
 pub enum Primitive {
     Int8,
     Int16,
@@ -351,6 +353,8 @@ pub enum Primitive {
 
     Boolean,
     String,
+
+    Any,
 }
 
 impl Value {
@@ -416,6 +420,7 @@ impl Value {
                         let value = parse_wrapped(input)?;
                         ValueType::Optional(Box::new(value))
                     }
+                    "any" => ValueType::Primitive(Primitive::Any),
                     _ => ValueType::Composite(name),
                 };
                 (ident_span, value_type)
