@@ -165,8 +165,8 @@ impl<'a> Analyzer<'a> {
                 Ok((field_add, field_rem))
             };
 
-            match field_def.value {
-                EnumFieldValue::Struct(ref struct_fields) => {
+            match &field_def.value {
+                EnumFieldValue::Struct(struct_fields) => {
                     check_variant(Variant::StructOrTuple)?;
                     let (field_add, field_rem) = add_field(true)?;
                     for struct_field_index in 0..struct_fields.len() {
@@ -193,16 +193,16 @@ impl<'a> Analyzer<'a> {
                                 (struct_field_rem - 1) as usize
                             }
                             None => {
+                                while self.modules.len() < (struct_field_add as usize) {
+                                    self.push_new_module();
+                                }
+
                                 let field_index =
                                     self.current.last_mut().unwrap().fields.last_mut().unwrap();
                                 let FieldIndex::EnumStruct(_, struct_field_indices) = field_index else {
                                     unreachable!();
                                 };
                                 struct_field_indices.push(struct_field_index);
-
-                                while self.modules.len() < (struct_field_add as usize) {
-                                    self.push_new_module();
-                                }
 
                                 self.modules.len()
                             }
@@ -217,7 +217,7 @@ impl<'a> Analyzer<'a> {
                                 .last_mut()
                                 .unwrap();
 
-                            let FieldIndex::EnumStruct(_, ref mut indices) = field_index else {
+                            let FieldIndex::EnumStruct(_, indices) = field_index else {
                                 unreachable!();
                             };
 
@@ -600,6 +600,7 @@ impl<'a> Analyzer<'a> {
 
             fn check_enum_fields(
                 &mut self,
+                version: usize,
                 enum_index: &TypeIndex,
                 enum_def: &'a Enum,
             ) -> Result<()> {
@@ -648,6 +649,16 @@ impl<'a> Analyzer<'a> {
                             let EnumFieldValue::Struct(struct_fields) = &field_def.value else {
                                 unreachable!();
                             };
+
+                            if struct_field_indices.is_empty() {
+                                return Err(Error::new(
+                                    field_def.name_span,
+                                    format!(
+                                        "enum struct variant has no fields in version {}",
+                                        version
+                                    ),
+                                ));
+                            }
 
                             for struct_field_index in struct_field_indices {
                                 let struct_field_def = &struct_fields[*struct_field_index];
@@ -715,30 +726,41 @@ impl<'a> Analyzer<'a> {
         };
 
         for mi in 0..self.modules.len() {
+            let version = mi + 1;
             let module = &self.modules[mi];
             if module.types.is_empty() {
                 return Err(Error::new(
                     Span::call_site(),
-                    format!("version {} is empty", mi + 1),
+                    format!("version {} has no types", version),
                 ));
             }
 
             for ti in 0..module.types.len() {
                 let type_index = &module.types[ti];
 
-                match &self.type_defs[type_index.index] {
+                let name_span = match &self.type_defs[type_index.index] {
                     Type::Node(node_def) => {
                         state.check_name_found(node_def.name.as_str(), true)?;
                         state.check_struct_fields(type_index, node_def)?;
+                        &node_def.name_span
                     }
                     Type::Struct(struct_def) => {
                         state.check_name_found(struct_def.name.as_str(), false)?;
                         state.check_struct_fields(type_index, struct_def)?;
+                        &struct_def.name_span
                     }
                     Type::Enum(enum_def) => {
                         state.check_name_found(enum_def.name.as_str(), false)?;
-                        state.check_enum_fields(type_index, enum_def)?;
+                        state.check_enum_fields(version, type_index, enum_def)?;
+                        &enum_def.name_span
                     }
+                };
+
+                if type_index.fields.is_empty() {
+                    return Err(Error::new(
+                        *name_span,
+                        format!("type has no fields in version {}", version),
+                    ));
                 }
             }
 
