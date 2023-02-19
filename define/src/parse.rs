@@ -274,6 +274,7 @@ pub struct EnumField {
     pub version: Option<Version>,
     pub name_span: Span,
     pub name: String,
+    pub value_span: Option<Span>,
     pub value: EnumFieldValue,
 }
 
@@ -288,26 +289,32 @@ impl EnumField {
     fn parse(input: ParseStream, version: Option<Version>) -> Result<Self> {
         let name_ident: Ident = input.parse()?;
 
-        let value = if input.peek(Brace) {
+        let (value_span, value) = if input.peek(Brace) {
+            let brace_span = input.span();
+
             let inner_input;
             braced!(inner_input in input);
             let input = inner_input;
 
             let fields = Struct::parse_fields(&input)?;
-            EnumFieldValue::Struct(fields)
+            (Some(brace_span), EnumFieldValue::Struct(fields))
         } else if input.peek(Paren) {
+            let paren_span = input.span();
             let values = Value::parse_tuple(input)?;
-            EnumFieldValue::Tuple(values)
+            (Some(paren_span), EnumFieldValue::Tuple(values))
         } else if input.peek(Token![=]) {
-            let _: Token![=] = input.parse()?;
+            let eq_tok: Token![=] = input.parse()?;
             let num_lit: LitInt = input.parse()?;
             let num = parse_int(&num_lit, "invalid enum int literal")?;
-            EnumFieldValue::Int {
-                num_span: num_lit.span(),
-                num,
-            }
+            (
+                Some(eq_tok.span),
+                EnumFieldValue::Int {
+                    num_span: num_lit.span(),
+                    num,
+                },
+            )
         } else {
-            EnumFieldValue::None
+            (None, EnumFieldValue::None)
         };
 
         let _: Token![,] = input.parse()?;
@@ -316,6 +323,7 @@ impl EnumField {
             version,
             name_span: name_ident.span(),
             name: name_ident.to_string(),
+            value_span,
             value,
         })
     }

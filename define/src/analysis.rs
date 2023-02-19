@@ -139,7 +139,7 @@ impl<'a> Analyzer<'a> {
                     variant = new_variant;
                 } else if variant != new_variant {
                     return Err(Error::new(
-                        field_def.name_span,
+                        field_def.value_span.unwrap(),
                         "Enums cannot have variants with both integer values, and tuple or struct values",
                     ));
                 }
