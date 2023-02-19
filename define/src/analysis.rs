@@ -1,8 +1,10 @@
 use proc_macro2::Span;
+use std::collections::HashMap;
 use syn::{Error, Result};
 
 use crate::parse::{
-    Enum, EnumField, EnumFieldValue, Struct, StructField, Type, Version, VersionItem,
+    Enum, EnumField, EnumFieldValue, Struct, StructField, Type, Value, ValueType, Version,
+    VersionItem,
 };
 
 pub struct Module {
@@ -89,6 +91,8 @@ impl<'a> Analyzer<'a> {
                 ),
             })?;
         }
+
+        self.check_modules()?;
 
         Ok(())
     }
@@ -249,10 +253,10 @@ impl<'a> Analyzer<'a> {
                 (rem - 1) as usize
             }
             None => {
-                self.current.push(TypeIndex::new(index));
                 while self.modules.len() < (add as usize) {
                     self.push_new_module();
                 }
+                self.current.push(TypeIndex::new(index));
                 self.modules.len()
             }
         };
@@ -290,15 +294,15 @@ impl<'a> Analyzer<'a> {
                 (rem - 1) as usize
             }
             None => {
+                while self.modules.len() < (add as usize) {
+                    self.push_new_module();
+                }
+
                 self.current
                     .last_mut()
                     .unwrap()
                     .fields
                     .push(new_field_index());
-
-                while self.modules.len() < (add as usize) {
-                    self.push_new_module();
-                }
 
                 self.modules.len()
             }
@@ -435,7 +439,10 @@ impl<'a> Analyzer<'a> {
         name_span: &Span,
     ) -> Result<()> {
         let error = || {
-            Err(Error::new(*name_span, "type overlaps with a previously defined type. Types that share the same name must exist in different versions"))
+            Err(Error::new(
+                *name_span,
+                "Item overlaps with a previously defined item. Items that share the same name must exist in different versions",
+            ))
         };
 
         if left.is_none() || right.is_none() {
@@ -456,7 +463,6 @@ impl<'a> Analyzer<'a> {
                     return error();
                 }
             }
-
             Ok(())
         };
 
@@ -489,6 +495,223 @@ impl<'a> Analyzer<'a> {
                     return error();
                 }
             },
+        }
+
+        Ok(())
+    }
+
+    fn check_modules(&self) -> Result<()> {
+        enum TypeNameState<'a> {
+            Found {
+                is_node: bool,
+            },
+            Used {
+                name_span: &'a Span,
+                expects_node: bool,
+            },
+        }
+        struct CheckModuleState<'a> {
+            type_names: HashMap<&'a str, TypeNameState<'a>>,
+        }
+        impl<'a> CheckModuleState<'a> {
+            fn check_name_found(&mut self, name: &'a str, is_node: bool) -> Result<()> {
+                if let Some(old_state) = self
+                    .type_names
+                    .insert(name, TypeNameState::Found { is_node })
+                {
+                    let TypeNameState::Used { name_span, expects_node } = old_state else {
+                        unreachable!();
+                    };
+
+                    if is_node && !expects_node {
+                        return Err(Error::new(
+                            *name_span,
+                            "node types must be enclosed by a ref type",
+                        ));
+                    }
+                }
+                Ok(())
+            }
+
+            fn check_name_used(
+                &mut self,
+                name: &'a str,
+                name_span: &'a Span,
+                expects_node: bool,
+            ) -> Result<()> {
+                if let Some(old_state) = self.type_names.get_mut(name) {
+                    match old_state {
+                        TypeNameState::Found { is_node } => {
+                            if expects_node && !*is_node {
+                                return Err(Error::new(
+                                    *name_span,
+                                    "only node types may be enclosed by a ref type",
+                                ));
+                            }
+                        }
+                        TypeNameState::Used { .. } => {
+                            *old_state = TypeNameState::Used {
+                                name_span,
+                                expects_node,
+                            };
+                        }
+                    }
+                } else {
+                    self.type_names.insert(
+                        name,
+                        TypeNameState::Used {
+                            name_span,
+                            expects_node,
+                        },
+                    );
+                }
+                Ok(())
+            }
+
+            fn check_struct_fields(
+                &mut self,
+                struct_index: &TypeIndex,
+                struct_def: &'a Struct,
+            ) -> Result<()> {
+                for field_index in &struct_index.fields {
+                    let FieldIndex::Index(field_index) = field_index else {
+                        unreachable!();
+                    };
+                    let field_def = &struct_def.fields[*field_index];
+                    self.check_value(&field_def.value, false)?;
+                }
+
+                Ok(())
+            }
+
+            fn check_enum_fields(
+                &mut self,
+                enum_index: &TypeIndex,
+                enum_def: &'a Enum,
+            ) -> Result<()> {
+                struct EnumIntState {
+                    last: u32,
+                    increment: u32,
+                }
+                let mut enum_int_state: Option<EnumIntState> = None;
+
+                for field_index in &enum_index.fields {
+                    match field_index {
+                        FieldIndex::Index(field_index) => {
+                            let field_def = &enum_def.fields[*field_index];
+                            match &field_def.value {
+                                EnumFieldValue::Int { num_span, num } => {
+                                    if let Some(state) = enum_int_state.as_mut() {
+                                        if *num <= state.last + state.increment {
+                                            return Err(Error::new(
+                                                *num_span,
+                                                "Enum discriminant must be greater than the last discriminant value + any increment values",
+                                            ));
+                                        }
+                                    }
+                                    enum_int_state = Some(EnumIntState {
+                                        last: *num,
+                                        increment: 0,
+                                    });
+                                }
+                                EnumFieldValue::Tuple(values) => {
+                                    for value in values {
+                                        self.check_value(value, false)?;
+                                    }
+                                }
+                                EnumFieldValue::None => {
+                                    if let Some(state) = enum_int_state.as_mut() {
+                                        state.increment += 1;
+                                    }
+                                }
+                                EnumFieldValue::Struct(_) => {
+                                    unreachable!();
+                                }
+                            }
+                        }
+                        FieldIndex::EnumStruct(field_index, struct_field_indices) => {
+                            let field_def = &enum_def.fields[*field_index];
+                            let EnumFieldValue::Struct(struct_fields) = &field_def.value else {
+                                unreachable!();
+                            };
+
+                            for struct_field_index in struct_field_indices {
+                                let struct_field_def = &struct_fields[*struct_field_index];
+                                self.check_value(&struct_field_def.value, false)?;
+                            }
+                        }
+                    }
+                }
+                Ok(())
+            }
+
+            fn check_value(&mut self, value: &'a Value, expects_node: bool) -> Result<()> {
+                if expects_node {
+                    if let ValueType::Composite(name) = &value.value_type {
+                        self.check_name_used(name.as_str(), &value.span, true)?;
+                    } else {
+                        return Err(Error::new(value.span, "expected node type"));
+                    }
+                } else {
+                    match &value.value_type {
+                        ValueType::Composite(name) => {
+                            self.check_name_used(name.as_str(), &value.span, false)?;
+                        }
+                        ValueType::Optional(value) => {
+                            self.check_value(value.as_ref(), false)?;
+                        }
+                        ValueType::Reference(value) => {
+                            self.check_value(value.as_ref(), true)?;
+                        }
+                        ValueType::Array(value, _) => {
+                            self.check_value(value.as_ref(), false)?;
+                        }
+                        ValueType::Slice(value) => {
+                            self.check_value(value.as_ref(), false)?;
+                        }
+                        ValueType::Tuple(values) => {
+                            for value in values {
+                                self.check_value(value, false)?;
+                            }
+                        }
+                        ValueType::Primitive(_) => {}
+                    }
+                }
+                Ok(())
+            }
+        }
+        let mut state = CheckModuleState::<'a> {
+            type_names: HashMap::new(),
+        };
+
+        for mi in 0..self.modules.len() {
+            let module = &self.modules[mi];
+            if module.types.is_empty() {
+                return Err(Error::new(
+                    Span::call_site(),
+                    format!("version {} is empty", mi + 1),
+                ));
+            }
+
+            for ti in 0..module.types.len() {
+                let type_index = &module.types[ti];
+
+                match &self.type_defs[type_index.index] {
+                    Type::Node(node_def) => {
+                        state.check_name_found(node_def.name.as_str(), true)?;
+                        state.check_struct_fields(type_index, node_def)?;
+                    }
+                    Type::Struct(struct_def) => {
+                        state.check_name_found(struct_def.name.as_str(), false)?;
+                        state.check_struct_fields(type_index, struct_def)?;
+                    }
+                    Type::Enum(enum_def) => {
+                        state.check_name_found(enum_def.name.as_str(), false)?;
+                        state.check_enum_fields(type_index, enum_def)?;
+                    }
+                }
+            }
+            state.type_names.clear();
         }
 
         Ok(())

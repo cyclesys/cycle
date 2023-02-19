@@ -321,7 +321,11 @@ impl EnumField {
     }
 }
 
-pub enum Value {
+pub struct Value {
+    pub span: Span,
+    pub value_type: ValueType,
+}
+pub enum ValueType {
     Composite(String),
     Optional(Box<Value>),
     Reference(Box<Value>),
@@ -359,7 +363,9 @@ impl Value {
         }
 
         let lookahead = input.lookahead1();
-        let result = if lookahead.peek(Bracket) {
+        let (span, value_type) = if lookahead.peek(Bracket) {
+            let bracket_span = input.span();
+
             let inner_input;
             bracketed!(inner_input in input);
             let input = inner_input;
@@ -370,49 +376,55 @@ impl Value {
                 let size: LitInt = input.parse()?;
                 expect_empty(&input)?;
 
-                Self::Array(
-                    Box::new(value),
-                    parse_int(&size, "invalid array size literal")?,
+                (
+                    bracket_span,
+                    ValueType::Array(
+                        Box::new(value),
+                        parse_int(&size, "invalid array size literal")?,
+                    ),
                 )
             } else {
-                Self::Slice(Box::from(value))
+                (bracket_span, ValueType::Slice(Box::from(value)))
             }
         } else if lookahead.peek(Paren) {
+            let paren_span = input.span();
             let values = Self::parse_tuple(input)?;
-            Self::Tuple(values)
+            (paren_span, ValueType::Tuple(values))
         } else if lookahead.peek(Ident::peek_any) {
+            let ident_span = input.span();
             if input.peek(Token![ref]) {
                 let _: Token![ref] = input.parse()?;
                 let value = parse_wrapped(input)?;
-                Self::Reference(Box::new(value))
+                (ident_span, ValueType::Reference(Box::new(value)))
             } else {
                 let ident: Ident = input.parse()?;
                 let name = ident.to_string();
-                match name.as_str() {
-                    "i8" => Self::Primitive(Primitive::Int8),
-                    "i16" => Self::Primitive(Primitive::Int16),
-                    "i32" => Self::Primitive(Primitive::Int32),
-                    "i64" => Self::Primitive(Primitive::Int64),
-                    "u8" => Self::Primitive(Primitive::UInt8),
-                    "u16" => Self::Primitive(Primitive::UInt16),
-                    "u32" => Self::Primitive(Primitive::UInt32),
-                    "u64" => Self::Primitive(Primitive::UInt64),
-                    "f32" => Self::Primitive(Primitive::Float32),
-                    "f64" => Self::Primitive(Primitive::Float64),
-                    "bool" => Self::Primitive(Primitive::Boolean),
-                    "str" => Self::Primitive(Primitive::String),
+                let value_type = match name.as_str() {
+                    "i8" => ValueType::Primitive(Primitive::Int8),
+                    "i16" => ValueType::Primitive(Primitive::Int16),
+                    "i32" => ValueType::Primitive(Primitive::Int32),
+                    "i64" => ValueType::Primitive(Primitive::Int64),
+                    "u8" => ValueType::Primitive(Primitive::UInt8),
+                    "u16" => ValueType::Primitive(Primitive::UInt16),
+                    "u32" => ValueType::Primitive(Primitive::UInt32),
+                    "u64" => ValueType::Primitive(Primitive::UInt64),
+                    "f32" => ValueType::Primitive(Primitive::Float32),
+                    "f64" => ValueType::Primitive(Primitive::Float64),
+                    "bool" => ValueType::Primitive(Primitive::Boolean),
+                    "str" => ValueType::Primitive(Primitive::String),
                     "opt" => {
                         let value = parse_wrapped(input)?;
-                        Self::Optional(Box::new(value))
+                        ValueType::Optional(Box::new(value))
                     }
-                    _ => Self::Composite(name),
-                }
+                    _ => ValueType::Composite(name),
+                };
+                (ident_span, value_type)
             }
         } else {
             return Err(lookahead.error());
         };
 
-        Ok(result)
+        Ok(Value { span, value_type })
     }
 
     fn parse_tuple(input: ParseStream) -> Result<Vec<Value>> {
