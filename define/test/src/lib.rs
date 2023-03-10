@@ -1,6 +1,6 @@
 #[test]
 fn define_test() {
-    cyder_define::define! {
+    cycle_define::define! {
         struct Struct {
             #[rem(2)]
             signed_int8: i8,

@@ -3,7 +3,7 @@
 version = 3
 
 [[package]]
-name = "cyder_define"
+name = "cycle_define"
 version = "0.1.0"
 dependencies = [
  "proc-macro2",
@@ -12,10 +12,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "cyder_define_test"
+name = "cycle_define_test"
 version = "0.1.0"
 dependencies = [
- "cyder_define",
+ "cycle_define",
 ]
 
 [[package]]

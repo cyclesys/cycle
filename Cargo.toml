@@ -1,5 +1,5 @@
 [package]
-name = "cyder"
+name = "cycle"
 version = "0.1.0"
 edition = "2021"
 
@@ -7,8 +7,8 @@ authors = ["dcov <dcov@pm.me>"]
 description = "A graph-oriented application runtime"
 readme = "README.md"
 license = "GPL-3.0-or-later"
-homepage = "https://github.com/dcov/cyder"
-repository = "https://github.com/dcov/cyder"
+homepage = "https://github.com/dcov/cycle"
+repository = "https://github.com/dcov/cycle"
 
 [dependencies.windows]
 version = "0.44.0"
