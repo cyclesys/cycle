@@ -2,14 +2,15 @@ use windows::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, PeekMessageW, TranslateMessage, MSG, PM_REMOVE, WM_QUIT,
 };
 
-mod window;
-use window::Window;
+mod channel;
+mod define;
+mod launch;
 
 mod render;
 use render::Renderer;
 
-mod channel;
-mod launch;
+mod window;
+use window::Window;
 
 pub struct WindowDispatch {
     renderer: Option<Renderer>,
