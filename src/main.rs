@@ -9,6 +9,8 @@ mod launch;
 mod render;
 use render::Renderer;
 
+mod repo;
+
 mod window;
 use window::Window;
 
