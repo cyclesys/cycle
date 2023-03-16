@@ -2,13 +2,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, PeekMessageW, TranslateMessage, MSG, PM_REMOVE, WM_QUIT,
 };
 
-mod channel;
-mod define;
+use libcycle::render::Renderer;
+
 mod launch;
-
-mod render;
-use render::Renderer;
-
 mod repo;
 
 mod window;

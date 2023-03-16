@@ -16,7 +16,7 @@ use definition::StoredDefinition;
 mod object;
 use object::StoredObject;
 
-pub(crate) enum Error {
+pub enum Error {
     InvalidPath,
     InvalidDir {
         has_leaves_file: bool,
@@ -30,7 +30,7 @@ pub(crate) enum Error {
     IO(io::Error),
 }
 
-pub(crate) type Result<T> = std::result::Result<T, Error>;
+pub type Result<T> = std::result::Result<T, Error>;
 
 fn result_from_io<T>(result: io::Result<T>) -> Result<T> {
     match result {
@@ -39,7 +39,7 @@ fn result_from_io<T>(result: io::Result<T>) -> Result<T> {
     }
 }
 
-pub(crate) struct SourceRepo {
+pub struct SourceRepo {
     // Objects found in the 'objects' sub-folder.
     objects: Vec<StoredObject>,
     // Definitions found in the 'definitions' sub-folder, and only those that define the currently
@@ -160,7 +160,7 @@ impl SourceRepo {
     }
 }
 
-pub(crate) struct ReadState<'a> {
+pub struct ReadState<'a> {
     bytes: &'a [u8],
     cursor: usize,
 }
@@ -234,7 +234,7 @@ impl<'a> ReadState<'a> {
     }
 }
 
-pub(crate) fn decode_file(path: &Path) -> Result<Vec<u8>> {
+pub fn decode_file(path: &Path) -> Result<Vec<u8>> {
     let bytes = result_from_io(fs::read(path))?;
     let mut decoder = ZlibDecoder::new(Vec::new());
     result_from_io(decoder.write_all(&bytes))?;
@@ -242,7 +242,7 @@ pub(crate) fn decode_file(path: &Path) -> Result<Vec<u8>> {
 }
 
 // TODO: move to util file?
-pub(crate) fn hash_bytes_to_hex(bytes: &[u8; 32]) -> String {
+pub fn hash_bytes_to_hex(bytes: &[u8; 32]) -> String {
     let mut hex = String::with_capacity(bytes.len() * 2);
     let mut push = |byte| {
         hex.push(char::from_digit(byte as u32, 16).unwrap());
@@ -255,7 +255,7 @@ pub(crate) fn hash_bytes_to_hex(bytes: &[u8; 32]) -> String {
 }
 
 // TODO: move to util file?
-pub(crate) fn hash_hex_to_bytes(hex: &str) -> Option<[u8; 32]> {
+pub fn hash_hex_to_bytes(hex: &str) -> Option<[u8; 32]> {
     fn match_hex_to_byte(hex_byte: u8) -> Option<u8> {
         match hex_byte {
             b'0'..=b'9' => Some(hex_byte - 48),

@@ -1,8 +1,8 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use super::{Error, ReadState, Result};
 
-pub(crate) struct StoredObject {
+pub struct StoredObject {
     // THe patch hash in which it was committed.
     pub hash: [u8; 32],
     // The index of the object when it was committed.
@@ -15,10 +15,7 @@ pub(crate) struct StoredObject {
     pub data: Box<[u8]>,
 }
 
-pub(crate) fn read_object_file(
-    path: &Path,
-    objects: &mut Vec<StoredObject>,
-) -> Result<Box<[[u8; 32]]>> {
+pub fn read_object_file(path: &Path, objects: &mut Vec<StoredObject>) -> Result<Box<[[u8; 32]]>> {
     let hash = {
         let file_name = path.file_name();
         let Some(file_name) = file_name else {

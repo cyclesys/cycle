@@ -4,7 +4,7 @@ use std::{
 };
 
 use windows::{
-    core::{w, Error as WindowsError, Result as WindowsResult, PWSTR},
+    core::{w, PWSTR},
     Win32::{
         Foundation::{
             SetHandleInformation, BOOL, HANDLE, HANDLE_FLAGS, HANDLE_FLAG_INHERIT,
@@ -21,19 +21,17 @@ use windows::{
     },
 };
 
-use crate::channel::{
-    Channel, ChannelArgs, Error as ChannelError, Result as ChannelResult, CHANNEL_SIZE,
-};
+use libcycle::channel::{self, args::ChannelArgs, Channel, CHANNEL_SIZE};
 
-pub(crate) enum Error {
-    ChannelErr(ChannelError),
-    Windows(WindowsError),
+pub enum Error {
+    ChannelErr(channel::Error),
+    Windows(windows::core::Error),
 }
 
-pub(crate) type Result<T> = std::result::Result<T, Error>;
+pub type Result<T> = std::result::Result<T, Error>;
 
 #[inline]
-fn result_from_channel<T>(channel_result: ChannelResult<T>) -> Result<T> {
+fn result_from_channel<T>(channel_result: channel::Result<T>) -> Result<T> {
     match channel_result {
         Ok(res) => Ok(res),
         Err(channel_error) => Err(Error::ChannelErr(channel_error)),
@@ -41,7 +39,7 @@ fn result_from_channel<T>(channel_result: ChannelResult<T>) -> Result<T> {
 }
 
 #[inline]
-fn result_from_windows<T>(windows_result: WindowsResult<T>) -> Result<T> {
+fn result_from_windows<T>(windows_result: windows::core::Result<T>) -> Result<T> {
     match windows_result {
         Ok(res) => Ok(res),
         Err(windows_error) => Err(Error::Windows(windows_error)),
@@ -53,7 +51,7 @@ struct Child {
     channel: Channel,
 }
 
-pub(crate) struct Launcher {
+pub struct Launcher {
     children: Vec<Child>,
 }
 
@@ -117,7 +115,7 @@ impl Launcher {
                 info.as_mut_ptr(),
             ) == false
             {
-                return Err(Error::Windows(WindowsError::from_win32()));
+                return Err(Error::Windows(windows::core::Error::from_win32()));
             }
 
             info.assume_init()
@@ -126,7 +124,7 @@ impl Launcher {
         #[inline]
         unsafe fn make_handle_uninheritable(handle: HANDLE) -> Result<()> {
             if SetHandleInformation(handle, HANDLE_FLAG_INHERIT.0, HANDLE_FLAGS(0)) == false {
-                Err(Error::Windows(WindowsError::from_win32()))
+                Err(Error::Windows(windows::core::Error::from_win32()))
             } else {
                 Ok(())
             }

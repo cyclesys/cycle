@@ -6,13 +6,9 @@ use windows::{
     },
 };
 
-pub enum Error {
-    Windows(WindowsError),
-}
+use super::{Error, Result};
 
-pub(super) type Result<T> = std::result::Result<T, Error>;
-
-pub(super) struct ChannelView {
+pub struct ChannelView {
     raw: *mut u8,
 }
 

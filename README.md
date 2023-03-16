@@ -1,2 +1,2 @@
 # cycle
-An in-progress graph-oriented application runtime.
+An in-progress object editor, and plugin framework.

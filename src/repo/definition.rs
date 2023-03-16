@@ -1,13 +1,13 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use crate::define::{
+use libcycle::define::{
     Definition, Enum, EnumField, EnumFieldType, EnumIntType, FieldType, Object, Primitive,
     Reference, Struct, StructField, Type,
 };
 
 use super::{Error, ReadState, Result};
 
-pub(crate) struct StoredDefinition {
+pub struct StoredDefinition {
     pub hash: [u8; 32],
     pub definition: Definition,
 }
@@ -77,7 +77,7 @@ impl EnumIntKind {
     }
 }
 
-pub(crate) fn read_definition_file(
+pub fn read_definition_file(
     path: &Path,
     hash: [u8; 32],
     definitions: &mut Vec<StoredDefinition>,
@@ -244,26 +244,24 @@ impl ReferenceKind {
     }
 }
 
-impl Primitive {
-    fn from_u8(v: u8) -> Option<Primitive> {
-        match v {
-            0 => Some(Primitive::Int8),
-            1 => Some(Primitive::Int16),
-            2 => Some(Primitive::Int32),
-            3 => Some(Primitive::Int64),
+fn primitive_from_u8(v: u8) -> Option<Primitive> {
+    match v {
+        0 => Some(Primitive::Int8),
+        1 => Some(Primitive::Int16),
+        2 => Some(Primitive::Int32),
+        3 => Some(Primitive::Int64),
 
-            4 => Some(Primitive::UInt8),
-            5 => Some(Primitive::UInt16),
-            6 => Some(Primitive::UInt32),
-            7 => Some(Primitive::UInt64),
+        4 => Some(Primitive::UInt8),
+        5 => Some(Primitive::UInt16),
+        6 => Some(Primitive::UInt32),
+        7 => Some(Primitive::UInt64),
 
-            8 => Some(Primitive::Float32),
-            9 => Some(Primitive::Float64),
+        8 => Some(Primitive::Float32),
+        9 => Some(Primitive::Float64),
 
-            10 => Some(Primitive::Boolean),
-            11 => Some(Primitive::String),
-            _ => None,
-        }
+        10 => Some(Primitive::Boolean),
+        11 => Some(Primitive::String),
+        _ => None,
     }
 }
 
@@ -310,7 +308,7 @@ fn read_field_type(state: &mut ReadState) -> Result<FieldType> {
             FieldType::Tuple(field_types)
         }
         FieldKind::Primitive => {
-            let Some(primitive) = Primitive::from_u8(state.read_u8()?) else {
+            let Some(primitive) = primitive_from_u8(state.read_u8()?) else {
                 return Err(Error::CorruptFile);
             };
             FieldType::Primitive(primitive)

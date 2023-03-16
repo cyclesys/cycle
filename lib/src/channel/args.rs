@@ -2,14 +2,9 @@ use std::env;
 
 use windows::Win32::Foundation::HANDLE;
 
-pub(crate) type Result<T> = std::result::Result<T, Error>;
+use super::{Error, Result};
 
-pub enum Error {
-    InvalidCmdLine,
-    InvalidArg,
-}
-
-pub(crate) struct ChannelArgs {
+pub struct ChannelArgs {
     pub exe: String,
     pub file: HANDLE,
     pub mutex: HANDLE,
@@ -25,12 +20,12 @@ impl ChannelArgs {
             if let Ok(handle) = isize::from_str_radix(arg.as_str(), 16) {
                 Ok(HANDLE(handle))
             } else {
-                Err(Error::InvalidArg)
+                Err(Error::InvalidCmdLineArgs)
             }
         }
 
         if args.len() != 5 {
-            Err(Error::InvalidCmdLine)
+            Err(Error::InvalidCmdLineArgs)
         } else {
             Ok(Self {
                 exe: args[0].clone(),

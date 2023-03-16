@@ -9,13 +9,7 @@ use windows::{
     },
 };
 
-pub enum Error {
-    ChannelWaitFailed(Option<WindowsError>),
-    ChannelTerminated,
-    Windows(WindowsError),
-}
-
-pub type Result<T> = std::result::Result<T, Error>;
+use super::{Error, Result};
 
 enum SyncState {
     Idle,
@@ -24,7 +18,7 @@ enum SyncState {
     End,
 }
 
-pub(super) struct ChannelSync {
+pub struct ChannelSync {
     mutex: HANDLE,
     wait_event: HANDLE,
     signal_event: HANDLE,
