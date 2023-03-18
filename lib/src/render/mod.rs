@@ -240,7 +240,7 @@ impl Renderer {
 
         let pipeline_state = {
             let (vertex_shader, pixel_shader) = {
-                let shader_code = include_bytes!("render.hlsl");
+                let shader_code = include_bytes!("main.hlsl");
 
                 let make_shader = |entry_point, target| unsafe {
                     let mut shader: Option<ID3DBlob> = None;
