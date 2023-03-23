@@ -3,6 +3,7 @@ use std::{
     ptr,
 };
 
+pub use windows::core::Error as WindowsError;
 use windows::{
     core::{w, PWSTR},
     Win32::{
@@ -21,34 +22,36 @@ use windows::{
     },
 };
 
-use libcycle::channel::{self, args::ChannelArgs, Channel, CHANNEL_SIZE};
+pub use libcycle::channel::Error as ChannelError;
+use libcycle::channel::{self, ChannelView};
 
 pub enum Error {
-    ChannelErr(channel::Error),
-    Windows(windows::core::Error),
+    Channel(ChannelError),
+    Windows(WindowsError),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
 
 #[inline]
-fn result_from_channel<T>(channel_result: channel::Result<T>) -> Result<T> {
-    match channel_result {
+fn result_from_channel<T>(result: channel::Result<T>) -> Result<T> {
+    match result {
         Ok(res) => Ok(res),
-        Err(channel_error) => Err(Error::ChannelErr(channel_error)),
+        Err(err) => Err(Error::Channel(err)),
     }
 }
 
 #[inline]
-fn result_from_windows<T>(windows_result: windows::core::Result<T>) -> Result<T> {
-    match windows_result {
+fn result_from_windows<T>(result: windows::core::Result<T>) -> Result<T> {
+    match result {
         Ok(res) => Ok(res),
-        Err(windows_error) => Err(Error::Windows(windows_error)),
+        Err(err) => Err(Error::Windows(err)),
     }
 }
 
 struct Child {
     info: PROCESS_INFORMATION,
-    channel: Channel,
+    input: ChannelView,
+    output: ChannelView,
 }
 
 pub struct Launcher {
@@ -57,7 +60,7 @@ pub struct Launcher {
 
 impl Launcher {
     pub fn launch(&mut self, exe: String) -> Result<()> {
-        let args = {
+        fn create_channel_view() -> Result<ChannelView> {
             // The handles are inheritable by child processes
             let handle_attr: SECURITY_ATTRIBUTES = SECURITY_ATTRIBUTES {
                 nLength: mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
@@ -65,36 +68,47 @@ impl Launcher {
                 bInheritHandle: true.into(),
             };
 
-            unsafe {
-                ChannelArgs {
-                    exe,
-                    file: result_from_windows(CreateFileMappingW(
+            let view = unsafe {
+                ChannelView::create(
+                    result_from_windows(CreateFileMappingW(
                         INVALID_HANDLE_VALUE,
                         Some(&handle_attr),
                         PAGE_READWRITE,
                         0,
-                        CHANNEL_SIZE,
+                        ChannelView::SIZE,
                         None,
                     ))?,
-                    mutex: result_from_windows(CreateMutexW(Some(&handle_attr), true, None))?,
-                    wait_event: result_from_windows(CreateEventW(
-                        Some(&handle_attr),
-                        true,
-                        false,
-                        None,
-                    ))?,
-                    signal_event: result_from_windows(CreateEventW(
-                        Some(&handle_attr),
-                        true,
-                        false,
-                        None,
-                    ))?,
+                    result_from_windows(CreateMutexW(Some(&handle_attr), true, None))?,
+                    result_from_windows(CreateEventW(Some(&handle_attr), true, false, None))?,
+                    result_from_windows(CreateEventW(Some(&handle_attr), true, false, None))?,
+                )
+            };
+            result_from_channel(view)
+        }
+        fn cleanup_channel_view_handles(view: &ChannelView) -> Result<()> {
+            fn make_handle_uninheritable(handle: HANDLE) -> Result<()> {
+                if unsafe { SetHandleInformation(handle, HANDLE_FLAG_INHERIT.0, HANDLE_FLAGS(0)) }
+                    == false
+                {
+                    Err(Error::Windows(windows::core::Error::from_win32()))
+                } else {
+                    Ok(())
                 }
             }
-        };
+            make_handle_uninheritable(view.file)?;
+            make_handle_uninheritable(view.mutex)?;
+            make_handle_uninheritable(view.wait_event)?;
+            make_handle_uninheritable(view.signal_event)?;
+            Ok(())
+        }
+
+        let input = create_channel_view()?;
+        let output = create_channel_view()?;
 
         let info = unsafe {
-            let mut cmd_line: Vec<u16> = args.to_cmd_line().encode_utf16().collect();
+            let mut cmd_line: Vec<u16> = channel::create_cmd_line(exe, &input, &output)
+                .encode_utf16()
+                .collect();
             cmd_line.push(0); // null terminator
 
             let mut info = MaybeUninit::<PROCESS_INFORMATION>::uninit();
@@ -121,24 +135,14 @@ impl Launcher {
             info.assume_init()
         };
 
-        #[inline]
-        unsafe fn make_handle_uninheritable(handle: HANDLE) -> Result<()> {
-            if SetHandleInformation(handle, HANDLE_FLAG_INHERIT.0, HANDLE_FLAGS(0)) == false {
-                Err(Error::Windows(windows::core::Error::from_win32()))
-            } else {
-                Ok(())
-            }
-        }
-        unsafe {
-            make_handle_uninheritable(args.file)?;
-            make_handle_uninheritable(args.mutex)?;
-            make_handle_uninheritable(args.wait_event)?;
-            make_handle_uninheritable(args.signal_event)?;
-        }
+        cleanup_channel_view_handles(&input)?;
+        cleanup_channel_view_handles(&output)?;
 
-        let channel = result_from_channel(Channel::create(args))?;
-
-        self.children.push(Child { info, channel });
+        self.children.push(Child {
+            info,
+            input,
+            output,
+        });
 
         Ok(())
     }
