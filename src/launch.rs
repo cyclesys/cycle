@@ -75,12 +75,10 @@ impl Launcher {
                         Some(&handle_attr),
                         PAGE_READWRITE,
                         0,
-                        ChannelView::SIZE,
+                        ChannelView::SIZE as u32,
                         None,
                     ))?,
                     result_from_windows(CreateMutexW(Some(&handle_attr), true, None))?,
-                    result_from_windows(CreateEventW(Some(&handle_attr), true, false, None))?,
-                    result_from_windows(CreateEventW(Some(&handle_attr), true, false, None))?,
                 )
             };
             result_from_channel(view)
@@ -95,10 +93,8 @@ impl Launcher {
                     Ok(())
                 }
             }
-            make_handle_uninheritable(view.file)?;
-            make_handle_uninheritable(view.mutex)?;
-            make_handle_uninheritable(view.wait_event)?;
-            make_handle_uninheritable(view.signal_event)?;
+            make_handle_uninheritable(view.file())?;
+            make_handle_uninheritable(view.mutex())?;
             Ok(())
         }
 

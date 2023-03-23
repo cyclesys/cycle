@@ -11,8 +11,12 @@ pub use view::ChannelView;
 
 pub enum Error {
     InvalidCmdLineArgs,
-    ChannelWaitFailed(Option<WindowsError>),
+    ChannelLockFailed(Option<WindowsError>),
+    ChannelUnlockFailed(Option<WindowsError>),
     ChannelTerminated,
+    ChannelUsedUnlocked,
+    ChannelInvalidState,
+    ChannelInvalidWrite,
     Windows(WindowsError),
 }
 
@@ -55,28 +59,14 @@ pub fn open() -> Result<(InputChannel, OutputChannel)> {
     } else {
         let output_file = handle(1)?;
         let output_mutex = handle(2)?;
-        let output_wait_event = handle(3)?;
-        let output_signal_event = handle(4)?;
-        let input_file = handle(5)?;
-        let input_mutex = handle(6)?;
-        let input_wait_event = handle(7)?;
-        let input_signal_event = handle(8)?;
+        let input_file = handle(3)?;
+        let input_mutex = handle(4)?;
         Ok((
             InputChannel {
-                view: ChannelView::create(
-                    input_file,
-                    input_mutex,
-                    input_wait_event,
-                    input_signal_event,
-                )?,
+                view: ChannelView::create(input_file, input_mutex)?,
             },
             OutputChannel {
-                view: ChannelView::create(
-                    output_file,
-                    output_mutex,
-                    output_wait_event,
-                    output_signal_event,
-                )?,
+                view: ChannelView::create(output_file, output_mutex)?,
             },
         ))
     }
@@ -84,15 +74,11 @@ pub fn open() -> Result<(InputChannel, OutputChannel)> {
 
 pub fn create_cmd_line(exe: String, input: &ChannelView, output: &ChannelView) -> String {
     format!(
-        "{} {:x} {:x} {:x} {:x} {:x} {:x} {:x} {:x}",
+        "{} {:x} {:x} {:x} {:x}",
         exe,
-        input.file.0,
-        input.mutex.0,
-        input.wait_event.0,
-        input.signal_event.0,
-        output.file.0,
-        output.mutex.0,
-        output.wait_event.0,
-        output.signal_event.0
+        input.file().0,
+        input.mutex().0,
+        output.file().0,
+        output.mutex().0,
     )
 }
