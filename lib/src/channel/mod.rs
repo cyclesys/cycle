@@ -72,35 +72,37 @@ impl OutputChannel {
 /// Opens the channels created by the system for the plugin.
 pub fn open() -> Result<(InputChannel, OutputChannel)> {
     let args: Vec<String> = env::args().collect();
+    let mut handle_idx = 1;
+    let mut read_handle = || -> Result<HANDLE> {
+        if !(handle_idx < args.len()) {
+            return Err(Error::InvalidCmdLine);
+        }
 
-    let handle = |idx: usize| -> Result<HANDLE> {
-        if let Ok(handle) = isize::from_str_radix(args[idx].as_str(), 16) {
+        if let Ok(handle) = isize::from_str_radix(args[handle_idx].as_str(), 16) {
+            handle_idx += 1;
             Ok(HANDLE(handle))
         } else {
             Err(Error::InvalidCmdLine)
         }
     };
 
-    if args.len() != (1 + 3 + 3) {
-        Err(Error::InvalidCmdLine)
-    } else {
-        let output_signal_event = handle(1)?;
-        let output_wait_event = handle(2)?;
-        let output_file = handle(3)?;
-        let input_signal_event = handle(4)?;
-        let input_wait_event = handle(5)?;
-        let input_file = handle(6)?;
-        Ok((
-            InputChannel {
-                sync: ChannelSync::new(input_wait_event, input_signal_event),
-                view: ChannelView::create(input_file)?,
-            },
-            OutputChannel {
-                sync: ChannelSync::new(output_wait_event, output_signal_event),
-                view: ChannelView::create(output_file)?,
-            },
-        ))
-    }
+    let output_signal_event = read_handle()?;
+    let output_wait_event = read_handle()?;
+    let output_file = read_handle()?;
+    let input_signal_event = read_handle()?;
+    let input_wait_event = read_handle()?;
+    let input_file = read_handle()?;
+
+    Ok((
+        InputChannel {
+            sync: ChannelSync::new(input_wait_event, input_signal_event),
+            view: ChannelView::create(input_file)?,
+        },
+        OutputChannel {
+            sync: ChannelSync::new(output_wait_event, output_signal_event),
+            view: ChannelView::create(output_file)?,
+        },
+    ))
 }
 
 pub fn create_cmd_line(
