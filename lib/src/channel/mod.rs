@@ -6,15 +6,17 @@ use windows::Win32::Foundation::HANDLE;
 mod messages;
 pub use messages::{PluginMessage, SystemMessage};
 
+mod sync;
+pub use sync::ChannelSync;
+
 mod view;
-pub use view::ChannelView;
+pub use view::{ChannelMessage, ChannelView};
 
 pub enum Error {
-    InvalidCmdLineArgs,
-    ChannelLockFailed(Option<WindowsError>),
-    ChannelUnlockFailed(Option<WindowsError>),
+    InvalidCmdLine,
+    ChannelWaitFailed(Option<WindowsError>),
+    ChannelSignalFailed(WindowsError),
     ChannelTerminated,
-    ChannelUsedUnlocked,
     ChannelInvalidState,
     ChannelInvalidWrite,
     Windows(WindowsError),
@@ -23,16 +25,41 @@ pub enum Error {
 pub type Result<T> = std::result::Result<T, Error>;
 
 pub struct InputChannel {
+    sync: ChannelSync,
     view: ChannelView,
 }
 
 impl InputChannel {
     pub fn read(&mut self) -> Result<SystemMessage> {
+        let mut buf: Option<Vec<u8>> = None;
+        loop {
+            self.sync.wait()?;
+            let message = self.view.read()?;
+            self.sync.signal()?;
+
+            let buf = match buf.as_mut() {
+                Some(buf) => buf,
+                None => {
+                    buf = Some(Vec::with_capacity(message.bytes.len() + message.bytes_left));
+                    buf.as_mut().unwrap()
+                }
+            };
+
+            buf.extend_from_slice(message.bytes);
+
+            if message.bytes_left == 0 {
+                break;
+            }
+        }
+
+        let buf = buf.unwrap();
+
         todo!()
     }
 }
 
 pub struct OutputChannel {
+    sync: ChannelSync,
     view: ChannelView,
 }
 
@@ -50,35 +77,47 @@ pub fn open() -> Result<(InputChannel, OutputChannel)> {
         if let Ok(handle) = isize::from_str_radix(args[idx].as_str(), 16) {
             Ok(HANDLE(handle))
         } else {
-            Err(Error::InvalidCmdLineArgs)
+            Err(Error::InvalidCmdLine)
         }
     };
 
-    if args.len() != 9 {
-        Err(Error::InvalidCmdLineArgs)
+    if args.len() != (1 + 3 + 3) {
+        Err(Error::InvalidCmdLine)
     } else {
-        let output_file = handle(1)?;
-        let output_mutex = handle(2)?;
-        let input_file = handle(3)?;
-        let input_mutex = handle(4)?;
+        let output_signal_event = handle(1)?;
+        let output_wait_event = handle(2)?;
+        let output_file = handle(3)?;
+        let input_signal_event = handle(4)?;
+        let input_wait_event = handle(5)?;
+        let input_file = handle(6)?;
         Ok((
             InputChannel {
-                view: ChannelView::create(input_file, input_mutex)?,
+                sync: ChannelSync::new(input_wait_event, input_signal_event),
+                view: ChannelView::create(input_file)?,
             },
             OutputChannel {
-                view: ChannelView::create(output_file, output_mutex)?,
+                sync: ChannelSync::new(output_wait_event, output_signal_event),
+                view: ChannelView::create(output_file)?,
             },
         ))
     }
 }
 
-pub fn create_cmd_line(exe: String, input: &ChannelView, output: &ChannelView) -> String {
+pub fn create_cmd_line(
+    exe: String,
+    input_sync: &ChannelSync,
+    input_view: &ChannelView,
+    output_sync: &ChannelSync,
+    output_view: &ChannelView,
+) -> String {
     format!(
-        "{} {:x} {:x} {:x} {:x}",
+        "{} {:x} {:x} {:x} {:x} {:x} {:x}",
         exe,
-        input.file().0,
-        input.mutex().0,
-        output.file().0,
-        output.mutex().0,
+        input_sync.wait_event().0,
+        input_sync.signal_event().0,
+        input_view.file().0,
+        output_sync.wait_event().0,
+        output_sync.signal_event().0,
+        output_view.file().0,
     )
 }
