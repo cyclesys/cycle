@@ -1,10 +1,18 @@
-use std::env;
+use std::{
+    env,
+    error::Error as StdError,
+    fmt::{Display, Formatter, Result as FmtResult},
+};
 
 pub use windows::core::Error as WindowsError;
 use windows::Win32::Foundation::HANDLE;
 
+mod de;
+
 mod messages;
 pub use messages::{PluginMessage, SystemMessage};
+
+mod ser;
 
 mod sync;
 pub use sync::ChannelSync;
@@ -12,6 +20,7 @@ pub use sync::ChannelSync;
 mod view;
 pub use view::{ChannelMessage, ChannelView};
 
+#[derive(Debug)]
 pub enum Error {
     InvalidCmdLine,
     ChannelWaitFailed(Option<WindowsError>),
@@ -19,8 +28,17 @@ pub enum Error {
     ChannelTerminated,
     ChannelInvalidState,
     ChannelInvalidWrite,
+    InvalidChannelMessage(String),
     Windows(WindowsError),
 }
+
+impl Display for Error {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        write!(f, "{:?}", self)
+    }
+}
+
+impl StdError for Error {}
 
 pub type Result<T> = std::result::Result<T, Error>;
 

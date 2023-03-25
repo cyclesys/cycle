@@ -10,6 +10,10 @@ license = "GPL-3.0-or-later"
 homepage = "https://github.com/dcov/cycle"
 repository = "https://github.com/dcov/cycle"
 
+[dependencies.serde]
+vesion = "1.0.158"
+features = ["derive"]
+
 [dependencies.windows]
 version = "0.44.0"
 features = [
