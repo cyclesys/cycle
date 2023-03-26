@@ -112,7 +112,7 @@ impl<'a> Serializer for &'a mut ChannelSerializer {
         let len = value.len_utf8();
         self.serialize_usize(len);
 
-        let mut buf = Vec::with_capacity(value.len_utf8());
+        let mut buf = vec![0; len];
         value.encode_utf8(&mut buf);
         self.output.append(&mut buf);
 

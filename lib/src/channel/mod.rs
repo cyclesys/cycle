@@ -141,3 +141,137 @@ pub fn create_cmd_line(
         output_view.file().0,
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{de::ChannelDeserializer, ser::ChannelSerializer};
+    use serde::{Deserialize, Serialize};
+    use std::collections::HashMap;
+
+    #[test]
+    fn channel_serde() {
+        #[derive(Serialize, Deserialize, Debug, PartialEq)]
+        struct UnitStruct;
+
+        #[derive(Serialize, Deserialize, Debug, PartialEq)]
+        struct NewTypeStruct(u8);
+
+        #[derive(Serialize, Deserialize, Debug, PartialEq)]
+        enum Enum {
+            NewType(u32),
+            Tuple(u8, u16),
+            Struct { string: String, seq: [u8; 32] },
+            Unit,
+        }
+
+        #[derive(Serialize, Deserialize, Debug, PartialEq)]
+        struct Struct {
+            unit_struct: UnitStruct,
+            new_type_struct: NewTypeStruct,
+            sub_enum: Enum,
+        }
+
+        #[derive(Serialize, Deserialize, Debug, PartialEq)]
+        struct Message<'a> {
+            true_bool: bool,
+            false_bool: bool,
+            int8: i8,
+            int16: i16,
+            int32: i32,
+            int64: i64,
+            int128: i128,
+            signed_size: isize,
+
+            uint8: u8,
+            uint16: u16,
+            uint32: u32,
+            uint64: u64,
+            uint128: u128,
+            unsigned_size: usize,
+
+            character: char,
+            str_ref: &'a str,
+            string: String,
+
+            bytes: &'a [u8],
+
+            none: Option<u8>,
+            some: Option<u8>,
+
+            unit: (),
+
+            unit_struct: UnitStruct,
+            new_type_struct: NewTypeStruct,
+
+            seq: Vec<String>,
+            tuple: (bool, u8),
+            map: HashMap<String, &'a [u8]>,
+
+            enum_new_type_variant: Enum,
+            enum_tuple_variant: Enum,
+            enum_struct_variant: Enum,
+            enum_unit_variant: Enum,
+
+            sub_struct: Struct,
+        }
+
+        let map = HashMap::new();
+        let ser_message = Message {
+            true_bool: true,
+            false_bool: false,
+
+            int8: -100,
+            int16: -1_000,
+            int32: -10_000,
+            int64: -100_000,
+            int128: -1_000_000,
+            signed_size: -10_000_000,
+
+            uint8: 100,
+            uint16: 1_000,
+            uint32: 10_000,
+            uint64: 100_000,
+            uint128: 1_000_000,
+            unsigned_size: 10_000_000,
+
+            character: 'A',
+            str_ref: "Hello",
+            string: "World".to_string(),
+
+            bytes: &[10, 20, 30, 40, 50],
+
+            none: None,
+            some: Some(10),
+
+            unit: (),
+
+            unit_struct: UnitStruct,
+            new_type_struct: NewTypeStruct(200),
+
+            seq: vec!["foo".to_string(), "bar".to_string()],
+            tuple: (true, 25),
+            map,
+
+            enum_new_type_variant: Enum::NewType(30_000),
+            enum_tuple_variant: Enum::Tuple(64, 128),
+            enum_struct_variant: Enum::Struct {
+                string: "string".to_string(),
+                seq: [16; 32],
+            },
+            enum_unit_variant: Enum::Unit,
+
+            sub_struct: Struct {
+                unit_struct: UnitStruct,
+                new_type_struct: NewTypeStruct(150),
+                sub_enum: Enum::Struct {
+                    string: "sub_enum".to_string(),
+                    seq: [32; 32],
+                },
+            },
+        };
+
+        let bytes = ChannelSerializer::serialize(&ser_message).unwrap();
+        let de_message: Message = ChannelDeserializer::deserialize(&bytes).unwrap();
+        assert_eq!(de_message, ser_message);
+    }
+}

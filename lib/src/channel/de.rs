@@ -191,7 +191,7 @@ impl<'de, 'a> Deserializer<'de> for &'a mut ChannelDeserializer<'de> {
         let len = self.read_usize()?;
         let str_bytes = self.read_byte_slice(len)?;
         match str::from_utf8(str_bytes) {
-            Ok(s) => visitor.visit_str(s),
+            Ok(s) => visitor.visit_borrowed_str(s),
             Err(_) => Err(Error::InvalidChannelMessage("invalid str".to_string())),
         }
     }
@@ -208,7 +208,7 @@ impl<'de, 'a> Deserializer<'de> for &'a mut ChannelDeserializer<'de> {
     fn deserialize_bytes<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
         let len = self.read_usize()?;
         let bytes = self.read_byte_slice(len)?;
-        visitor.visit_bytes(bytes)
+        visitor.visit_borrowed_bytes(bytes)
     }
 
     fn deserialize_byte_buf<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
