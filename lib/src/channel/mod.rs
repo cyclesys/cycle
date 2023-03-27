@@ -1,18 +1,28 @@
+use serde::{de::DeserializeOwned, Serialize};
 use std::{
     env,
     error::Error as StdError,
     fmt::{Display, Formatter, Result as FmtResult},
+    marker::PhantomData,
 };
 
-pub use windows::core::Error as WindowsError;
-use windows::Win32::Foundation::HANDLE;
+pub use windows::core::{Error as WindowsError, Result as WindowsResult};
+use windows::Win32::{
+    Foundation::{HANDLE, INVALID_HANDLE_VALUE},
+    System::{
+        Memory::{CreateFileMappingW, PAGE_READWRITE},
+        Threading::CreateEventW,
+    },
+};
 
 mod de;
+use de::ChannelDeserializer;
 
 mod messages;
 pub use messages::{PluginMessage, SystemMessage};
 
 mod ser;
+use ser::ChannelSerializer;
 
 mod sync;
 pub use sync::ChannelSync;
@@ -42,53 +52,101 @@ impl StdError for Error {}
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-pub struct InputChannel {
-    sync: ChannelSync,
-    view: ChannelView,
+fn result_from_windows<T>(result: WindowsResult<T>) -> Result<T> {
+    match result {
+        Ok(t) => Ok(t),
+        Err(err) => Err(Error::Windows(err)),
+    }
 }
 
-impl InputChannel {
-    pub fn read(&mut self) -> Result<SystemMessage> {
+pub struct InputChannel<T: DeserializeOwned> {
+    sync: ChannelSync,
+    view: ChannelView,
+    _phantom: PhantomData<T>,
+}
+
+impl<T: DeserializeOwned> InputChannel<T> {
+    pub fn new(sync: ChannelSync, view: ChannelView) -> Self {
+        Self {
+            sync,
+            view,
+            _phantom: PhantomData,
+        }
+    }
+
+    pub fn read(&self) -> Result<T> {
         let mut buf: Option<Vec<u8>> = None;
         loop {
             self.sync.wait()?;
-            let message = self.view.read()?;
+            let msg = self.view.read()?;
             self.sync.signal()?;
 
             let buf = match buf.as_mut() {
                 Some(buf) => buf,
                 None => {
-                    buf = Some(Vec::with_capacity(message.bytes.len() + message.bytes_left));
+                    buf = Some(Vec::with_capacity(msg.bytes.len() + msg.bytes_left));
                     buf.as_mut().unwrap()
                 }
             };
 
-            buf.extend_from_slice(message.bytes);
+            buf.extend_from_slice(msg.bytes);
 
-            if message.bytes_left == 0 {
+            if msg.bytes_left == 0 {
                 break;
             }
         }
-
-        let buf = buf.unwrap();
-
-        todo!()
+        ChannelDeserializer::deserialize(&buf.unwrap())
     }
 }
 
-pub struct OutputChannel {
+pub struct OutputChannel<T: Serialize> {
     sync: ChannelSync,
     view: ChannelView,
+    _phantom: PhantomData<T>,
 }
 
-impl OutputChannel {
-    pub fn write(&mut self, msg: PluginMessage) -> Result<()> {
-        todo!()
+impl<T: Serialize> OutputChannel<T> {
+    pub fn new(sync: ChannelSync, view: ChannelView) -> Self {
+        Self {
+            sync,
+            view,
+            _phantom: PhantomData,
+        }
+    }
+
+    pub fn write(&self, msg: T) -> Result<()> {
+        let msg_bytes = ChannelSerializer::serialize(&msg)?;
+
+        let mut bytes_left = msg_bytes.len();
+        let mut cursor = 0;
+        while bytes_left > ChannelView::MAX_WRITE {
+            bytes_left -= ChannelView::MAX_WRITE;
+
+            self.sync.wait()?;
+            self.view.write(ChannelMessage {
+                bytes_left,
+                bytes: &msg_bytes[cursor..(cursor + ChannelView::MAX_WRITE)],
+            })?;
+            self.sync.signal()?;
+
+            cursor += ChannelView::MAX_WRITE;
+        }
+
+        if bytes_left > 0 {
+            self.sync.wait()?;
+            self.view.write(ChannelMessage {
+                bytes_left: 0,
+                bytes: &msg_bytes[cursor..(cursor + bytes_left)],
+            })?;
+            self.sync.signal()?;
+        }
+
+        Ok(())
     }
 }
 
 /// Opens the channels created by the system for the plugin.
-pub fn open() -> Result<(InputChannel, OutputChannel)> {
+pub fn open_channels() -> Result<(InputChannel<SystemMessage>, OutputChannel<PluginMessage>)> {
     let args: Vec<String> = env::args().collect();
     let mut handle_idx = 1;
     let mut read_handle = || -> Result<HANDLE> {
@@ -112,18 +170,38 @@ pub fn open() -> Result<(InputChannel, OutputChannel)> {
     let input_file = read_handle()?;
 
     Ok((
-        InputChannel {
-            sync: ChannelSync::new(input_wait_event, input_signal_event),
-            view: ChannelView::create(input_file)?,
-        },
-        OutputChannel {
-            sync: ChannelSync::new(output_wait_event, output_signal_event),
-            view: ChannelView::create(output_file)?,
-        },
+        InputChannel::new(
+            ChannelSync::new(input_wait_event, input_signal_event),
+            ChannelView::create(input_file)?,
+        ),
+        OutputChannel::new(
+            ChannelSync::new(output_wait_event, output_signal_event),
+            ChannelView::create(output_file)?,
+        ),
     ))
 }
 
-pub fn create_cmd_line(
+pub fn create_channel(initial_state: bool) -> Result<(ChannelSync, ChannelView)> {
+    unsafe {
+        let view = ChannelView::create(result_from_windows(CreateFileMappingW(
+            INVALID_HANDLE_VALUE,
+            None,
+            PAGE_READWRITE,
+            0,
+            ChannelView::SIZE as u32,
+            None,
+        ))?)?;
+
+        let sync = ChannelSync::new(
+            result_from_windows(CreateEventW(None, true, initial_state, None))?,
+            result_from_windows(CreateEventW(None, true, !initial_state, None))?,
+        );
+
+        Ok((sync, view))
+    }
+}
+
+pub fn format_cmd_line(
     exe: String,
     input_sync: &ChannelSync,
     input_view: &ChannelView,
@@ -144,9 +222,12 @@ pub fn create_cmd_line(
 
 #[cfg(test)]
 mod tests {
-    use super::{de::ChannelDeserializer, ser::ChannelSerializer};
+    use super::{
+        de::ChannelDeserializer, ser::ChannelSerializer, sync::ChannelSync, view::ChannelView,
+        InputChannel, OutputChannel,
+    };
     use serde::{Deserialize, Serialize};
-    use std::collections::HashMap;
+    use std::{collections::HashMap, thread};
 
     #[test]
     fn channel_serde() {
@@ -215,7 +296,11 @@ mod tests {
             sub_struct: Struct,
         }
 
-        let map = HashMap::new();
+        let values = vec![1u8, 2u8, 3u8];
+        let mut map = HashMap::new();
+        map.insert("one".to_string(), &values[0..1]);
+        map.insert("two".to_string(), &values[1..2]);
+        map.insert("three".to_string(), &values[2..3]);
         let ser_message = Message {
             true_bool: true,
             false_bool: false,
@@ -273,5 +358,70 @@ mod tests {
         let bytes = ChannelSerializer::serialize(&ser_message).unwrap();
         let de_message: Message = ChannelDeserializer::deserialize(&bytes).unwrap();
         assert_eq!(de_message, ser_message);
+    }
+
+    #[test]
+    fn channel_input_output() {
+        #[derive(Serialize, Deserialize)]
+        struct Message {
+            s: Option<String>,
+        }
+
+        fn write_and_read_back(
+            output: &OutputChannel<Message>,
+            input: &InputChannel<Message>,
+            s: String,
+        ) {
+            output.write(Message { s: Some(s.clone()) }).unwrap();
+            let message: Message = input.read().unwrap();
+            assert_eq!(message.s.unwrap(), s);
+        }
+
+        let (input_sync, input_view) = super::create_channel(false).unwrap();
+        let (output_sync, output_view) = super::create_channel(true).unwrap();
+
+        let handle = {
+            let input_wait = output_sync.signal_event();
+            let input_signal = output_sync.wait_event();
+            let input_file = output_view.file();
+            let output_wait = input_sync.signal_event();
+            let output_signal = input_sync.wait_event();
+            let output_file = input_view.file();
+
+            // spawn a thread that just writes back the same message
+            thread::spawn(move || {
+                let input = InputChannel::new(
+                    ChannelSync::new(input_wait, input_signal),
+                    ChannelView::create(input_file).unwrap(),
+                );
+                let output = OutputChannel::new(
+                    ChannelSync::new(output_wait, output_signal),
+                    ChannelView::create(output_file).unwrap(),
+                );
+
+                loop {
+                    let message: Message = input.read().unwrap();
+                    if message.s.is_none() {
+                        break;
+                    }
+
+                    output
+                        .write(Message {
+                            s: Some(message.s.unwrap()),
+                        })
+                        .unwrap();
+                }
+            })
+        };
+
+        let input = InputChannel::new(input_sync, input_view);
+        let output = OutputChannel::new(output_sync, output_view);
+
+        write_and_read_back(&output, &input, "Hello".to_string());
+        write_and_read_back(&output, &input, "world".to_string());
+        write_and_read_back(&output, &input, "!".to_string());
+        output.write(Message { s: None }).unwrap();
+
+        handle.join().unwrap();
     }
 }

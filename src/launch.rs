@@ -1,28 +1,20 @@
-use std::{
-    mem::{self, MaybeUninit},
-    ptr,
-};
+use std::mem::{self, MaybeUninit};
 
 pub use windows::core::Error as WindowsError;
 use windows::{
     core::PWSTR,
     Win32::{
-        Foundation::{
-            SetHandleInformation, HANDLE, HANDLE_FLAGS, HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE,
-        },
-        Security::SECURITY_ATTRIBUTES,
-        System::{
-            Memory::{CreateFileMappingW, PAGE_READWRITE},
-            Threading::{
-                CreateEventW, CreateProcessW, PROCESS_CREATION_FLAGS, PROCESS_INFORMATION,
-                STARTUPINFOW,
-            },
+        Foundation::{SetHandleInformation, HANDLE, HANDLE_FLAGS, HANDLE_FLAG_INHERIT},
+        System::Threading::{
+            CreateProcessW, PROCESS_CREATION_FLAGS, PROCESS_INFORMATION, STARTUPINFOW,
         },
     },
 };
 
 pub use libcycle::channel::Error as ChannelError;
-use libcycle::channel::{self, ChannelSync, ChannelView};
+use libcycle::channel::{
+    self, ChannelSync, ChannelView, InputChannel, OutputChannel, PluginMessage, SystemMessage,
+};
 
 pub enum Error {
     Channel(ChannelError),
@@ -49,10 +41,8 @@ fn result_from_windows<T>(result: windows::core::Result<T>) -> Result<T> {
 
 struct Child {
     info: PROCESS_INFORMATION,
-    input_sync: ChannelSync,
-    input_view: ChannelView,
-    output_sync: ChannelSync,
-    output_view: ChannelView,
+    input: InputChannel<PluginMessage>,
+    output: OutputChannel<SystemMessage>,
 }
 
 pub struct Launcher {
@@ -61,71 +51,44 @@ pub struct Launcher {
 
 impl Launcher {
     pub fn launch(&mut self, exe: String) -> Result<()> {
-        fn create_channel_resources(initial_state: bool) -> Result<(ChannelSync, ChannelView)> {
-            unsafe {
-                // The handles are inheritable by child processes
-                let handle_attr: SECURITY_ATTRIBUTES = SECURITY_ATTRIBUTES {
-                    nLength: mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
-                    lpSecurityDescriptor: ptr::null_mut(),
-                    bInheritHandle: true.into(),
-                };
-
-                let view = result_from_channel(ChannelView::create(result_from_windows(
-                    CreateFileMappingW(
-                        INVALID_HANDLE_VALUE,
-                        Some(&handle_attr),
-                        PAGE_READWRITE,
-                        0,
-                        ChannelView::SIZE as u32,
-                        None,
-                    ),
-                )?))?;
-
-                let sync = ChannelSync::new(
-                    result_from_windows(CreateEventW(
-                        Some(&handle_attr),
-                        true,
-                        initial_state,
-                        None,
-                    ))?,
-                    result_from_windows(CreateEventW(
-                        Some(&handle_attr),
-                        true,
-                        !initial_state,
-                        None,
-                    ))?,
-                );
-
-                Ok((sync, view))
+        fn set_handle_inheritable(handle: HANDLE, inheritable: bool) -> Result<()> {
+            if unsafe {
+                SetHandleInformation(
+                    handle,
+                    HANDLE_FLAG_INHERIT.0,
+                    HANDLE_FLAGS(inheritable.into()),
+                )
+            } == false
+            {
+                Err(Error::Windows(windows::core::Error::from_win32()))
+            } else {
+                Ok(())
             }
         }
+        fn setup_channel_resource_handles(sync: &ChannelSync, view: &ChannelView) -> Result<()> {
+            set_handle_inheritable(sync.wait_event(), true)?;
+            set_handle_inheritable(sync.signal_event(), true)?;
+            set_handle_inheritable(view.file(), true)
+        }
         fn cleanup_channel_resource_handles(sync: &ChannelSync, view: &ChannelView) -> Result<()> {
-            fn make_handle_uninheritable(handle: HANDLE) -> Result<()> {
-                if unsafe { SetHandleInformation(handle, HANDLE_FLAG_INHERIT.0, HANDLE_FLAGS(0)) }
-                    == false
-                {
-                    Err(Error::Windows(windows::core::Error::from_win32()))
-                } else {
-                    Ok(())
-                }
-            }
-            make_handle_uninheritable(sync.wait_event())?;
-            make_handle_uninheritable(sync.signal_event())?;
-            make_handle_uninheritable(view.file())?;
-            Ok(())
+            set_handle_inheritable(sync.wait_event(), false)?;
+            set_handle_inheritable(sync.signal_event(), false)?;
+            set_handle_inheritable(view.file(), false)
         }
 
         // The input channel should start out owned by the plugin, hence the wait_event starts out
         // unsignaled, and the signal_event starts out signaled.
-        let (input_sync, input_view) = create_channel_resources(false)?;
+        let (input_sync, input_view) = result_from_channel(channel::create_channel(false))?;
+        setup_channel_resource_handles(&input_sync, &input_view)?;
 
         // The output channel should start out owned by the system, hence the wait_event starts out
         // signaled, and the signal_event starts out unsignaled.
-        let (output_sync, output_view) = create_channel_resources(true)?;
+        let (output_sync, output_view) = result_from_channel(channel::create_channel(true))?;
+        setup_channel_resource_handles(&output_sync, &output_view)?;
 
         let info = unsafe {
             let mut cmd_line: Vec<u16> =
-                channel::create_cmd_line(exe, &input_sync, &input_view, &output_sync, &output_view)
+                channel::format_cmd_line(exe, &input_sync, &input_view, &output_sync, &output_view)
                     .encode_utf16()
                     .collect();
             cmd_line.push(0); // null terminator
@@ -159,10 +122,8 @@ impl Launcher {
 
         self.children.push(Child {
             info,
-            input_sync,
-            input_view,
-            output_sync,
-            output_view,
+            input: InputChannel::new(input_sync, input_view),
+            output: OutputChannel::new(output_sync, output_view),
         });
 
         Ok(())
