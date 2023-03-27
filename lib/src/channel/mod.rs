@@ -75,12 +75,23 @@ impl<T: DeserializeOwned> InputChannel<T> {
     }
 
     pub fn read(&self) -> Result<T> {
-        let mut buf: Option<Vec<u8>> = None;
-        loop {
-            self.sync.wait()?;
-            let msg = self.view.read()?;
-            self.sync.signal()?;
+        Ok(self.read_impl(None)?.unwrap())
+    }
 
+    pub fn read_for(&self, ms: u32) -> Result<Option<T>> {
+        self.read_impl(Some(ms))
+    }
+
+    fn read_impl(&self, for_ms: Option<u32>) -> Result<Option<T>> {
+        let mut buf: Option<Vec<u8>> = None;
+        let mut wait_state = WaitState {
+            is_first_wait: true,
+        };
+        loop {
+            if !wait_state.wait(&self.sync, for_ms)? {
+                return Ok(None);
+            }
+            let msg = self.view.read()?;
             let buf = match buf.as_mut() {
                 Some(buf) => buf,
                 None => {
@@ -88,14 +99,20 @@ impl<T: DeserializeOwned> InputChannel<T> {
                     buf.as_mut().unwrap()
                 }
             };
-
             buf.extend_from_slice(msg.bytes);
 
+            // We signal after appending the msg bytes and not before, because the bytes are
+            // borrowed, not copied, from the ChannelView shared memory, and they could otherwise
+            // be overwritten before having read them.
+            self.sync.signal()?;
+
+            // bytes_left is copied so it's safe to read after signaling.
             if msg.bytes_left == 0 {
                 break;
             }
         }
-        ChannelDeserializer::deserialize(&buf.unwrap())
+        let msg = ChannelDeserializer::deserialize(&buf.unwrap())?;
+        Ok(Some(msg))
     }
 }
 
@@ -115,14 +132,28 @@ impl<T: Serialize> OutputChannel<T> {
     }
 
     pub fn write(&self, msg: T) -> Result<()> {
-        let msg_bytes = ChannelSerializer::serialize(&msg)?;
+        self.write_impl(&msg, None)?;
+        Ok(())
+    }
 
+    pub fn write_for(&self, msg: &T, ms: u32) -> Result<bool> {
+        self.write_impl(msg, Some(ms))
+    }
+
+    pub fn write_impl(&self, msg: &T, for_ms: Option<u32>) -> Result<bool> {
+        let msg_bytes = ChannelSerializer::serialize(msg)?;
+
+        let mut wait_state = WaitState {
+            is_first_wait: true,
+        };
         let mut bytes_left = msg_bytes.len();
         let mut cursor = 0;
         while bytes_left > ChannelView::MAX_WRITE {
             bytes_left -= ChannelView::MAX_WRITE;
 
-            self.sync.wait()?;
+            if !wait_state.wait(&self.sync, for_ms)? {
+                return Ok(false);
+            }
             self.view.write(ChannelMessage {
                 bytes_left,
                 bytes: &msg_bytes[cursor..(cursor + ChannelView::MAX_WRITE)],
@@ -133,7 +164,9 @@ impl<T: Serialize> OutputChannel<T> {
         }
 
         if bytes_left > 0 {
-            self.sync.wait()?;
+            if !wait_state.wait(&self.sync, for_ms)? {
+                return Ok(false);
+            }
             self.view.write(ChannelMessage {
                 bytes_left: 0,
                 bytes: &msg_bytes[cursor..(cursor + bytes_left)],
@@ -141,7 +174,26 @@ impl<T: Serialize> OutputChannel<T> {
             self.sync.signal()?;
         }
 
-        Ok(())
+        Ok(true)
+    }
+}
+
+struct WaitState {
+    is_first_wait: bool,
+}
+
+impl WaitState {
+    #[inline]
+    fn wait(&mut self, sync: &ChannelSync, for_ms: Option<u32>) -> Result<bool> {
+        if self.is_first_wait {
+            if !sync.wait(for_ms)? {
+                return Ok(false);
+            }
+            self.is_first_wait = false;
+        } else {
+            sync.wait(None)?;
+        }
+        Ok(true)
     }
 }
 
@@ -224,10 +276,10 @@ pub fn format_cmd_line(
 mod tests {
     use super::{
         de::ChannelDeserializer, ser::ChannelSerializer, sync::ChannelSync, view::ChannelView,
-        InputChannel, OutputChannel,
+        InputChannel, OutputChannel, Result, HANDLE,
     };
-    use serde::{Deserialize, Serialize};
-    use std::{collections::HashMap, thread};
+    use serde::{de::DeserializeOwned, Deserialize, Serialize};
+    use std::{collections::HashMap, thread, time::Duration};
 
     #[test]
     fn channel_serde() {
@@ -377,17 +429,11 @@ mod tests {
             assert_eq!(message.s.unwrap(), s);
         }
 
-        let (input_sync, input_view) = super::create_channel(false).unwrap();
-        let (output_sync, output_view) = super::create_channel(true).unwrap();
+        let (input, output) = create_input_output_channels();
 
         let handle = {
-            let input_wait = output_sync.signal_event();
-            let input_signal = output_sync.wait_event();
-            let input_file = output_view.file();
-            let output_wait = input_sync.signal_event();
-            let output_signal = input_sync.wait_event();
-            let output_file = input_view.file();
-
+            let ((input_wait, input_signal, input_file), (output_wait, output_signal, output_file)) =
+                reverse_input_output_channel_resources(&input, &output);
             // spawn a thread that just writes back the same message
             thread::spawn(move || {
                 let input = InputChannel::new(
@@ -414,14 +460,113 @@ mod tests {
             })
         };
 
-        let input = InputChannel::new(input_sync, input_view);
-        let output = OutputChannel::new(output_sync, output_view);
-
         write_and_read_back(&output, &input, "Hello".to_string());
         write_and_read_back(&output, &input, "world".to_string());
         write_and_read_back(&output, &input, "!".to_string());
         output.write(Message { s: None }).unwrap();
 
         handle.join().unwrap();
+    }
+
+    #[test]
+    fn channel_input_output_timeout() {
+        #[derive(Serialize, Deserialize)]
+        struct Message {
+            num: usize,
+        }
+
+        let (input, output) = create_input_output_channels();
+
+        let handle = {
+            let ((input_wait, input_signal, input_file), (output_wait, output_signal, output_file)) =
+                reverse_input_output_channel_resources(&input, &output);
+
+            thread::spawn(move || {
+                let input = InputChannel::new(
+                    ChannelSync::new(input_wait, input_signal),
+                    ChannelView::create(input_file).unwrap(),
+                );
+                let output = OutputChannel::new(
+                    ChannelSync::new(output_wait, output_signal),
+                    ChannelView::create(output_file).unwrap(),
+                );
+
+                // wait for 1ms before timing out
+                let message: Option<Message> = input.read_for(1).unwrap();
+                assert!(message.is_none());
+
+                // Sleep for two second so that the writer thread times out writing the second
+                // message
+                thread::sleep(Duration::new(2, 0));
+
+                // read should go through now
+                let message = input.read_for(1).unwrap();
+                assert!(message.is_some());
+                let num = message.unwrap().num;
+
+                // sleep for one second so the writer thread times out reading
+                thread::sleep(Duration::new(1, 0));
+
+                // this thread owns the output channel at this moment so it should go through
+                let did_write = output.write_for(&Message { num }, 1).unwrap();
+                assert!(did_write);
+
+                // this thread does not own the output channel at this moment so it should not go trhough
+                let did_write = output.write_for(&Message { num: 3 }, 1).unwrap();
+                assert!(!did_write);
+            })
+        };
+
+        // sleep for one second before writing so that the reading thread times out reading
+        thread::sleep(Duration::new(1, 0));
+
+        // this thread owns the output channel at this moment so it should go through
+        let did_write = output.write_for(&Message { num: 1 }, 1).unwrap();
+        assert!(did_write);
+
+        // this thread does not own the output channel at this moment so it should not go trhough
+        let did_write = output.write_for(&Message { num: 2 }, 1).unwrap();
+        assert!(!did_write);
+
+        let message = input.read_for(1).unwrap();
+        assert!(message.is_none());
+
+        // sleep for two seconds so that the reader thread times out writing the second message
+        thread::sleep(Duration::new(3, 0));
+
+        // read for ten seconds just to be sure the test doesn't fail due to OS latencies.
+        let message = input.read_for(1).unwrap();
+        assert!(message.is_some());
+        assert_eq!(message.unwrap().num, 1);
+
+        handle.join().unwrap();
+    }
+
+    fn create_input_output_channels<T: Serialize + DeserializeOwned>(
+    ) -> (InputChannel<T>, OutputChannel<T>) {
+        let (input_sync, input_view) = super::create_channel(false).unwrap();
+        let (output_sync, output_view) = super::create_channel(true).unwrap();
+
+        (
+            InputChannel::new(input_sync, input_view),
+            OutputChannel::new(output_sync, output_view),
+        )
+    }
+
+    fn reverse_input_output_channel_resources<T: Serialize + DeserializeOwned>(
+        input: &InputChannel<T>,
+        output: &OutputChannel<T>,
+    ) -> ((HANDLE, HANDLE, HANDLE), (HANDLE, HANDLE, HANDLE)) {
+        let input_wait = output.sync.signal_event();
+        let input_signal = output.sync.wait_event();
+        let input_file = output.view.file();
+        let output_wait = input.sync.signal_event();
+        let output_signal = input.sync.wait_event();
+        let output_file = input.view.file();
+
+        (
+            (input_wait, input_signal, input_file),
+            (output_wait, output_signal, output_file),
+        )
     }
 }

@@ -31,10 +31,16 @@ impl ChannelSync {
         }
     }
 
-    pub fn wait(&self) -> Result<()> {
-        match unsafe { WaitForSingleObject(self.wait_event, INFINITE) } {
-            WAIT_OBJECT_0 => Ok(()),
-            WAIT_TIMEOUT => Err(Error::ChannelWaitFailed(None)),
+    pub fn wait(&self, for_ms: Option<u32>) -> Result<bool> {
+        match unsafe { WaitForSingleObject(self.wait_event, for_ms.unwrap_or(INFINITE)) } {
+            WAIT_OBJECT_0 => Ok(true),
+            WAIT_TIMEOUT => {
+                if for_ms.is_some() {
+                    Ok(false)
+                } else {
+                    Err(Error::ChannelWaitFailed(None))
+                }
+            }
             WAIT_ABANDONED => Err(Error::ChannelTerminated),
             WAIT_FAILED => Err(Error::ChannelWaitFailed(Some(WindowsError::from_win32()))),
             _ => unreachable!(),
