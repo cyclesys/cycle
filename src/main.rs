@@ -5,7 +5,6 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use libcycle::render::Renderer;
 
 mod launch;
-mod repo;
 
 mod window;
 use window::Window;
