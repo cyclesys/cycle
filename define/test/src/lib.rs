@@ -1,6 +1,6 @@
 #[test]
 fn define_test() {
-    cycle_define::define! {
+    libcycle_define::define! {
         struct Struct {
             #[rem(2)]
             signed_int8: i8,

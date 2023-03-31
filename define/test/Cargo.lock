@@ -3,7 +3,7 @@
 version = 3
 
 [[package]]
-name = "cycle_define"
+name = "libcycle_define"
 version = "0.1.0"
 dependencies = [
  "proc-macro2",
@@ -12,10 +12,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "cycle_define_test"
+name = "libcycle_define_test"
 version = "0.1.0"
 dependencies = [
- "cycle_define",
+ "libcycle_define",
 ]
 
 [[package]]
