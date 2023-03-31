@@ -1,6 +1,5 @@
-use std::mem;
-
 use proc_macro2::Span;
+use std::mem;
 use syn::{
     braced, bracketed,
     ext::IdentExt,
@@ -11,7 +10,7 @@ use syn::{
 };
 
 mod kw {
-    syn::custom_keyword!(node);
+    syn::custom_keyword!(obj);
     syn::custom_keyword!(any);
     syn::custom_keyword!(add);
     syn::custom_keyword!(rem);
@@ -27,9 +26,9 @@ impl Parse for Definition {
         while !input.is_empty() {
             let lookahead = input.lookahead1();
             if lookahead.peek(Token![#]) {
-                type_ver.parse(input, "type def (i.e. node, struct, or enum)")?;
-            } else if lookahead.peek(kw::node) {
-                types.push(Type::Node(Struct::parse(input, type_ver.consume())?));
+                type_ver.parse(input, "type def (i.e. obj, struct, or enum)")?;
+            } else if lookahead.peek(kw::obj) {
+                types.push(Type::Object(Struct::parse(input, type_ver.consume())?));
             } else if lookahead.peek(Token![struct]) {
                 types.push(Type::Struct(Struct::parse(input, type_ver.consume())?));
             } else if lookahead.peek(Token![enum]) {
@@ -44,7 +43,7 @@ impl Parse for Definition {
 }
 
 pub enum Type {
-    Node(Struct),
+    Object(Struct),
     Struct(Struct),
     Enum(Enum),
 }
@@ -170,7 +169,7 @@ impl Struct {
         if input.peek(Token![struct]) {
             let _: Token![struct] = input.parse()?;
         } else {
-            let _: kw::node = input.parse()?;
+            let _: kw::obj = input.parse()?;
         }
 
         let name_ident: Ident = input.parse()?;

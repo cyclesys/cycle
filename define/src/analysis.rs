@@ -3,8 +3,7 @@ use std::collections::HashMap;
 use syn::{Error, Result};
 
 use crate::parse::{
-    Enum, EnumField, EnumFieldValue, Primitive, Struct, StructField, Type, Value, ValueType,
-    Version, VersionItem,
+    Enum, EnumFieldValue, Primitive, Struct, Type, Value, ValueType, Version, VersionItem,
 };
 
 pub struct Module {
@@ -62,8 +61,8 @@ impl<'a> Analyzer<'a> {
         for type_index in 0..self.type_defs.len() {
             let type_def = &self.type_defs[type_index];
             match type_def {
-                Type::Node(node_def) => {
-                    self.add_struct(type_index, node_def)?;
+                Type::Object(obj_def) => {
+                    self.add_struct(type_index, obj_def)?;
                 }
                 Type::Struct(struct_def) => {
                     self.add_struct(type_index, struct_def)?;
@@ -74,11 +73,9 @@ impl<'a> Analyzer<'a> {
             }
 
             Self::check_name_repeat(type_index, |index| match &self.type_defs[index] {
-                Type::Node(node_def) => (
-                    node_def.version.as_ref(),
-                    &node_def.name,
-                    &node_def.name_span,
-                ),
+                Type::Object(obj_def) => {
+                    (obj_def.version.as_ref(), &obj_def.name, &obj_def.name_span)
+                }
                 Type::Struct(struct_def) => (
                     struct_def.version.as_ref(),
                     &struct_def.name,
@@ -517,30 +514,30 @@ impl<'a> Analyzer<'a> {
     fn check_modules(&self) -> Result<()> {
         enum TypeNameState<'a> {
             Found {
-                is_node: bool,
+                is_obj: bool,
             },
             Used {
                 name_span: &'a Span,
-                expects_node: bool,
+                expects_obj: bool,
             },
         }
         struct CheckModuleState<'a> {
             type_names: HashMap<&'a str, TypeNameState<'a>>,
         }
         impl<'a> CheckModuleState<'a> {
-            fn check_name_found(&mut self, name: &'a str, is_node: bool) -> Result<()> {
+            fn check_name_found(&mut self, name: &'a str, is_obj: bool) -> Result<()> {
                 if let Some(old_state) = self
                     .type_names
-                    .insert(name, TypeNameState::Found { is_node })
+                    .insert(name, TypeNameState::Found { is_obj })
                 {
-                    let TypeNameState::Used { name_span, expects_node } = old_state else {
+                    let TypeNameState::Used { name_span, expects_obj } = old_state else {
                         unreachable!();
                     };
 
-                    if is_node && !expects_node {
+                    if is_obj && !expects_obj {
                         return Err(Error::new(
                             *name_span,
-                            "node types must be enclosed by a ref type",
+                            "object types must be enclosed by a ref type",
                         ));
                     }
                 }
@@ -551,22 +548,22 @@ impl<'a> Analyzer<'a> {
                 &mut self,
                 name: &'a str,
                 name_span: &'a Span,
-                expects_node: bool,
+                expects_obj: bool,
             ) -> Result<()> {
                 if let Some(old_state) = self.type_names.get_mut(name) {
                     match old_state {
-                        TypeNameState::Found { is_node } => {
-                            if expects_node && !*is_node {
+                        TypeNameState::Found { is_obj } => {
+                            if expects_obj && !*is_obj {
                                 return Err(Error::new(
                                     *name_span,
-                                    "only node types may be enclosed by a ref type",
+                                    "only object types may be enclosed by a ref type",
                                 ));
                             }
                         }
                         TypeNameState::Used { .. } => {
                             *old_state = TypeNameState::Used {
                                 name_span,
-                                expects_node,
+                                expects_obj,
                             };
                         }
                     }
@@ -575,7 +572,7 @@ impl<'a> Analyzer<'a> {
                         name,
                         TypeNameState::Used {
                             name_span,
-                            expects_node,
+                            expects_obj,
                         },
                     );
                 }
@@ -670,9 +667,9 @@ impl<'a> Analyzer<'a> {
                 Ok(())
             }
 
-            fn check_value(&mut self, value: &'a Value, expects_node: bool) -> Result<()> {
-                if expects_node {
-                    let error = || Err(Error::new(value.span, "expected node type"));
+            fn check_value(&mut self, value: &'a Value, expects_obj: bool) -> Result<()> {
+                if expects_obj {
+                    let error = || Err(Error::new(value.span, "expected object type"));
                     match &value.value_type {
                         ValueType::Composite(name) => {
                             self.check_name_used(name.as_str(), &value.span, true)?;
@@ -739,10 +736,10 @@ impl<'a> Analyzer<'a> {
                 let type_index = &module.types[ti];
 
                 let name_span = match &self.type_defs[type_index.index] {
-                    Type::Node(node_def) => {
-                        state.check_name_found(node_def.name.as_str(), true)?;
-                        state.check_struct_fields(type_index, node_def)?;
-                        &node_def.name_span
+                    Type::Object(obj_def) => {
+                        state.check_name_found(obj_def.name.as_str(), true)?;
+                        state.check_struct_fields(type_index, obj_def)?;
+                        &obj_def.name_span
                     }
                     Type::Struct(struct_def) => {
                         state.check_name_found(struct_def.name.as_str(), false)?;

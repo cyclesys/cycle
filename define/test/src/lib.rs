@@ -73,13 +73,13 @@ fn define_test() {
             Tag2(u8, u8),
         }
 
-        node Child {
+        obj Child {
             f1: Struct,
             f2: ValEnum,
             f3: TagEnum,
         }
 
-        node Parent {
+        obj Parent {
             child: ref<Child>,
             children: [ref<Child>],
             parents: [ref<Parent>; 2],
