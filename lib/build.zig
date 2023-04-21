@@ -19,7 +19,7 @@ pub fn build(b: *std.Build) void {
         .name = "lib",
         // In this case the main source file is merely a path, however, in more
         // complicated build scripts, this could be a generated file.
-        .root_source_file = .{ .path = "src/main.zig" },
+        .root_source_file = .{ .path = "src/lib.zig" },
         .target = target,
         .optimize = optimize,
     });
@@ -27,18 +27,21 @@ pub fn build(b: *std.Build) void {
     // This declares intent for the library to be installed into the standard
     // location when the user invokes the "install" step (the default step when
     // running `zig build`).
-    lib.install();
+    b.installArtifact(lib);
 
-    // Creates a step for unit testing.
-    const main_tests = b.addTest(.{
-        .root_source_file = .{ .path = "src/main.zig" },
+    // Creates a step for unit testing. This only builds the test executable
+    // but does not run it.
+    const lib_tests = b.addTest(.{
+        .root_source_file = .{ .path = "src/lib.zig" },
         .target = target,
         .optimize = optimize,
     });
+
+    const run_lib_tests = b.addRunArtifact(lib_tests);
 
     // This creates a build step. It will be visible in the `zig build --help` menu,
     // and can be selected like this: `zig build test`
     // This will evaluate the `test` step rather than the default, which is "install".
     const test_step = b.step("test", "Run library tests");
-    test_step.dependOn(&main_tests.step);
+    test_step.dependOn(&run_lib_tests.step);
 }
