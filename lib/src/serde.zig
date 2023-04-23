@@ -1,9 +1,66 @@
 const std = @import("std");
-const mem = std.mem;
-const Allocator = std.mem.Allocator;
-const ArrayList = std.ArrayList;
 
-pub fn serialize(comptime Type: type, value: Type, out: *ArrayList(u8)) !void {
+pub const Error = error{
+    BufferOverCapacity,
+    OutOfBytes,
+    DeserializeInvalidBool,
+    DeserializeInvalidOptional,
+    DeserializeInvalidTaggedUnion,
+} || std.mem.Allocator.Error;
+
+const ByteList = std.ArrayList(u8);
+
+const SerializeState = union(enum) {
+    list: *ByteList,
+    fixed: struct {
+        buf: []u8,
+        len: usize = 0,
+    },
+
+    fn write(self: *SerializeState, byte: u8) !void {
+        switch (self.*) {
+            .list => |list| {
+                try list.append(byte);
+            },
+            .fixed => |*fixed| {
+                if (fixed.len + 1 > fixed.buf.len) {
+                    return error.BufferOverCapacity;
+                }
+
+                fixed.buf[fixed.len] = byte;
+                fixed.len += 1;
+            },
+        }
+    }
+
+    fn writeSlice(self: *SerializeState, bytes: []const u8) !void {
+        switch (self.*) {
+            .list => |list| {
+                try list.appendSlice(bytes);
+            },
+            .fixed => |*fixed| {
+                if (fixed.len + bytes.len > fixed.buf.len) {
+                    return error.BufferOverCapacity;
+                }
+
+                const start = fixed.len;
+                const end = fixed.len + bytes.len;
+                @memcpy(
+                    @ptrCast([*]u8, fixed.buf[start..end]),
+                    @ptrCast([*]const u8, bytes),
+                    bytes.len,
+                );
+                fixed.len += bytes.len;
+            },
+        }
+    }
+};
+
+pub fn serialize(
+    comptime Type: type,
+    value: Type,
+    state: *SerializeState,
+) Error!void {
     switch (@typeInfo(Type)) {
         .Type,
         .NoReturn,
@@ -24,7 +81,7 @@ pub fn serialize(comptime Type: type, value: Type, out: *ArrayList(u8)) !void {
             // do nothing
         },
         .Bool => {
-            try out.append(if (value) 1 else 0);
+            try state.write(if (value) 1 else 0);
         },
         .Int => |info| {
             const size = @sizeOf(Type);
@@ -36,7 +93,7 @@ pub fn serialize(comptime Type: type, value: Type, out: *ArrayList(u8)) !void {
             });
 
             const cast_value = @intCast(IntCast, value);
-            try out.appendSlice(&@bitCast([size]u8, cast_value));
+            try state.writeSlice(&@bitCast([size]u8, cast_value));
         },
         .Float => {
             const size = @sizeOf(Type);
@@ -46,7 +103,7 @@ pub fn serialize(comptime Type: type, value: Type, out: *ArrayList(u8)) !void {
                 },
             });
             const cast_value = @floatCast(FloatCast, value);
-            try out.appendSlice(&@bitCast([size]u8, cast_value));
+            try state.writeSlice(&@bitCast([size]u8, cast_value));
         },
         .Pointer => |info| {
             switch (info.size) {
@@ -54,15 +111,19 @@ pub fn serialize(comptime Type: type, value: Type, out: *ArrayList(u8)) !void {
                 .Slice => {},
             }
 
-            try out.appendSlice(&@bitCast([@sizeOf(usize)]u8, value.len));
+            try state.writeSlice(&@bitCast([@sizeOf(usize)]u8, value.len));
 
-            for (value) |elem| {
-                try serialize(info.child, elem, out);
+            if (info.child == u8) {
+                try state.writeSlice(value);
+            } else {
+                for (value) |elem| {
+                    try serialize(info.child, elem, state);
+                }
             }
         },
         .Array => |info| {
             for (value) |elem| {
-                try serialize(info.child, elem, out);
+                try serialize(info.child, elem, state);
             }
         },
         .Struct => |info| {
@@ -71,15 +132,15 @@ pub fn serialize(comptime Type: type, value: Type, out: *ArrayList(u8)) !void {
                     @compileError("cannot serialize comptime struct fields");
                 }
 
-                try serialize(field.type, @field(value, field.name), out);
+                try serialize(field.type, @field(value, field.name), state);
             }
         },
         .Optional => |info| {
             if (value == null) {
-                try out.append(0);
+                try state.write(0);
             } else {
-                try out.append(1);
-                try serialize(info.child, value.?, out);
+                try state.write(1);
+                try serialize(info.child, value.?, state);
             }
         },
         .Enum => {
@@ -91,7 +152,7 @@ pub fn serialize(comptime Type: type, value: Type, out: *ArrayList(u8)) !void {
                 },
             });
             const cast_value = @intCast(IntCast, @enumToInt(value));
-            try out.appendSlice(&@bitCast([size]u8, cast_value));
+            try state.writeSlice(&@bitCast([size]u8, cast_value));
         },
         .Union => |info| {
             if (info.tag_type == null) {
@@ -106,11 +167,11 @@ pub fn serialize(comptime Type: type, value: Type, out: *ArrayList(u8)) !void {
                 });
                 const tag_value = @intCast(IntCast, @enumToInt(value));
 
-                try out.appendSlice(&@bitCast([tag_size]u8, tag_value));
+                try state.writeSlice(&@bitCast([tag_size]u8, tag_value));
 
                 inline for (info.fields) |field| {
-                    if (mem.eql(u8, field.name, @tagName(value))) {
-                        try serialize(field.type, @field(value, field.name), out);
+                    if (std.mem.eql(u8, field.name, @tagName(value))) {
+                        try serialize(field.type, @field(value, field.name), state);
                     }
                 }
             }
@@ -119,7 +180,7 @@ pub fn serialize(comptime Type: type, value: Type, out: *ArrayList(u8)) !void {
 }
 
 const DeserializeState = struct {
-    allocator: Allocator,
+    allocator: std.mem.Allocator,
     buf: []const u8,
     pos: usize = 0,
 
@@ -137,7 +198,7 @@ const DeserializeState = struct {
     }
 };
 
-pub fn deserialize(comptime Type: type, state: *DeserializeState) !Type {
+pub fn deserialize(comptime Type: type, state: *DeserializeState) Error!Type {
     switch (@typeInfo(Type)) {
         .Type,
         .NoReturn,
@@ -195,7 +256,7 @@ pub fn deserialize(comptime Type: type, state: *DeserializeState) !Type {
             }
 
             const len = @bitCast(usize, try state.read(@sizeOf(usize)));
-            var out = try ArrayList(info.child).initCapacity(state.allocator, len);
+            var out = try std.ArrayList(info.child).initCapacity(state.allocator, len);
             errdefer out.deinit();
 
             for (0..len) |_| {
@@ -252,7 +313,7 @@ pub fn deserialize(comptime Type: type, state: *DeserializeState) !Type {
                 const tag_name = @tagName(@intToEnum(info.tag_type.?, @intCast(tag_int, tag_value)));
 
                 inline for (info.fields) |field| {
-                    if (mem.eql(u8, field.name, tag_name)) {
+                    if (std.mem.eql(u8, field.name, tag_name)) {
                         return @unionInit(Type, field.name, try deserialize(field.type, state));
                     }
                 }
@@ -266,9 +327,9 @@ pub fn deserialize(comptime Type: type, state: *DeserializeState) !Type {
 const testing = std.testing;
 
 fn serde(comptime Type: type, value: Type) !Type {
-    var buf = ArrayList(u8).init(testing.allocator);
+    var buf = ByteList.init(testing.allocator);
     defer buf.deinit();
-    try serialize(Type, value, &buf);
+    try serialize(Type, value, &.{ .list = &buf });
     return deserialize(Type, &DeserializeState{ .allocator = testing.allocator, .buf = buf.items });
 }
 
