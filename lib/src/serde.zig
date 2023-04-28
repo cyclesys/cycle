@@ -56,11 +56,7 @@ const SerializeState = union(enum) {
     }
 };
 
-pub fn serialize(
-    comptime Type: type,
-    value: Type,
-    state: *SerializeState,
-) Error!void {
+pub fn serialize(comptime Type: type, value: Type, state: *SerializeState) Error!void {
     switch (@typeInfo(Type)) {
         .Type,
         .NoReturn,
@@ -107,18 +103,21 @@ pub fn serialize(
         },
         .Pointer => |info| {
             switch (info.size) {
-                .One, .Many, .C => @compileError("cannot serialize pointer type: " ++ @typeName(Type)),
-                .Slice => {},
-            }
+                .Many, .C => @compileError("cannot serialize pointer type: " ++ @typeName(Type)),
+                .One => {
+                    try serialize(info.child, value.*, state);
+                },
+                .Slice => {
+                    try state.writeSlice(&@bitCast([@sizeOf(usize)]u8, value.len));
 
-            try state.writeSlice(&@bitCast([@sizeOf(usize)]u8, value.len));
-
-            if (info.child == u8) {
-                try state.writeSlice(value);
-            } else {
-                for (value) |elem| {
-                    try serialize(info.child, elem, state);
-                }
+                    if (info.child == u8) {
+                        try state.writeSlice(value);
+                    } else {
+                        for (value) |elem| {
+                            try serialize(info.child, elem, state);
+                        }
+                    }
+                },
             }
         },
         .Array => |info| {
@@ -166,13 +165,13 @@ pub fn serialize(
                     },
                 });
                 const tag_value = @intCast(IntCast, @enumToInt(value));
-
                 try state.writeSlice(&@bitCast([tag_size]u8, tag_value));
 
-                inline for (info.fields) |field| {
-                    if (std.mem.eql(u8, field.name, @tagName(value))) {
-                        try serialize(field.type, @field(value, field.name), state);
-                    }
+                switch (value) {
+                    inline else => |val, tag| {
+                        const FieldType = UnionFieldType(Type, tag);
+                        try serialize(FieldType, val, state);
+                    },
                 }
             }
         },
@@ -251,19 +250,24 @@ pub fn deserialize(comptime Type: type, state: *DeserializeState) Error!Type {
         },
         .Pointer => |info| {
             switch (info.size) {
-                .One, .Many, .C => @compileError("can't deserialize pointer type: " ++ @typeName(Type)),
-                .Slice => {},
+                .Many, .C => @compileError("can't deserialize pointer type: " ++ @typeName(Type)),
+                .One => {
+                    var ptr = try state.allocator.create(info.child);
+                    ptr.* = try deserialize(info.child, state);
+                    return ptr;
+                },
+                .Slice => {
+                    const len = @bitCast(usize, try state.read(@sizeOf(usize)));
+                    var out = try std.ArrayList(info.child).initCapacity(state.allocator, len);
+                    errdefer out.deinit();
+
+                    for (0..len) |_| {
+                        try out.append(try deserialize(info.child, state));
+                    }
+
+                    return out.toOwnedSlice();
+                },
             }
-
-            const len = @bitCast(usize, try state.read(@sizeOf(usize)));
-            var out = try std.ArrayList(info.child).initCapacity(state.allocator, len);
-            errdefer out.deinit();
-
-            for (0..len) |_| {
-                try out.append(try deserialize(info.child, state));
-            }
-
-            return out.toOwnedSlice();
         },
         .Array => |info| {
             var out: Type = undefined;
@@ -301,7 +305,9 @@ pub fn deserialize(comptime Type: type, state: *DeserializeState) Error!Type {
             if (info.tag_type == null) {
                 @compileError("cannot deserialize untagged union types");
             } else {
-                const tag_size = @sizeOf(info.tag_type.?);
+                const Tag = info.tag_type.?;
+
+                const tag_size = @sizeOf(Tag);
                 const IntCast = @Type(.{
                     .Int = .{
                         .signedness = .unsigned,
@@ -309,19 +315,195 @@ pub fn deserialize(comptime Type: type, state: *DeserializeState) Error!Type {
                     },
                 });
                 const tag_value = @bitCast(IntCast, try state.read(tag_size));
-                const tag_int = @typeInfo(info.tag_type.?).Enum.tag_type;
-                const tag_name = @tagName(@intToEnum(info.tag_type.?, @intCast(tag_int, tag_value)));
 
-                inline for (info.fields) |field| {
-                    if (std.mem.eql(u8, field.name, tag_name)) {
-                        return @unionInit(Type, field.name, try deserialize(field.type, state));
-                    }
+                const tag_info = @typeInfo(Tag).Enum;
+                const TagInt = tag_info.tag_type;
+
+                switch (@intToEnum(Tag, @intCast(TagInt, tag_value))) {
+                    inline else => |tag| {
+                        const FieldType = UnionFieldType(Type, tag);
+                        return @unionInit(Type, @tagName(tag), try deserialize(FieldType, state));
+                    },
                 }
-
-                return error.DeserializeInvalidTaggedUnion;
             }
         },
     }
+}
+
+pub inline fn destroy(comptime Type: type, value: Type, allocator: std.mem.Allocator) void {
+    switch (@typeInfo(Type)) {
+        .Type,
+        .NoReturn,
+        .ComptimeFloat,
+        .ComptimeInt,
+        .Undefined,
+        .Null,
+        .ErrorUnion,
+        .ErrorSet,
+        .Fn,
+        .Opaque,
+        .Frame,
+        .AnyFrame,
+        .Vector,
+        .EnumLiteral,
+        => @compileError("cannot destroy type: " ++ @typeName(Type)),
+
+        .Void, .Bool, .Int, .Float, .Enum => {
+            // nothing to do here
+        },
+
+        .Pointer => |info| {
+            switch (info.size) {
+                .Many, .C => @compileError("cannot destroy pointer type: " ++ @typeName(Type)),
+                .One => {
+                    if (allocates(info.child)) {
+                        destroy(info.child, value.*, allocator);
+                    }
+                    allocator.destroy(value);
+                },
+                .Slice => {
+                    if (allocates(info.child)) {
+                        for (value) |elem| {
+                            destroy(info.child, elem, allocator);
+                        }
+                    }
+                    allocator.free(value);
+                },
+            }
+        },
+
+        .Array => |info| {
+            if (allocates(info.child)) {
+                for (value) |elem| {
+                    destroy(info.child, elem, allocator);
+                }
+            }
+        },
+
+        .Struct => |info| {
+            const allocating_fields = comptime blk: {
+                var fields: [info.fields.len]std.builtin.Type.StructField = undefined;
+                var len = 0;
+                for (info.fields) |field| {
+                    if (allocates(field.type)) {
+                        fields[len] = field;
+                        len += 1;
+                    }
+                }
+                break :blk fields[0..len];
+            };
+
+            inline for (allocating_fields) |field| {
+                destroy(field.type, @field(value, field.name), allocator);
+            }
+        },
+
+        .Optional => |info| {
+            if (allocates(info.child)) {
+                if (value) |v| {
+                    destroy(info.child, v, allocator);
+                }
+            }
+        },
+
+        .Union => |info| {
+            if (info.tag_type == null) {
+                @compileError("can't destroy untagged union types");
+            }
+
+            const resolve = struct {
+                const allocating_fields = blk: {
+                    var fields: [info.fields.len]std.builtin.Type.UnionField = undefined;
+                    var len = 0;
+                    for (info.fields) |field| {
+                        if (allocates(field.type)) {
+                            fields[len] = field;
+                            len += 1;
+                        }
+                    }
+
+                    break :blk fields[0..len];
+                };
+
+                fn fieldAllocates(comptime tag: anytype) bool {
+                    for (allocating_fields) |field| {
+                        if (std.mem.eql(u8, @tagName(tag), field.name)) {
+                            return true;
+                        }
+                    }
+                    return false;
+                }
+            };
+
+            switch (value) {
+                inline else => |val, tag| {
+                    if (resolve.fieldAllocates(tag)) {
+                        const FieldType = UnionFieldType(Type, tag);
+                        destroy(FieldType, val, allocator);
+                    }
+                },
+            }
+        },
+    }
+}
+
+fn allocates(comptime Type: type) bool {
+    switch (@typeInfo(Type)) {
+        .Type,
+        .NoReturn,
+        .ComptimeFloat,
+        .ComptimeInt,
+        .Undefined,
+        .Null,
+        .ErrorUnion,
+        .ErrorSet,
+        .Fn,
+        .Opaque,
+        .Frame,
+        .AnyFrame,
+        .Vector,
+        .EnumLiteral,
+        => @compileError("invalid type: " ++ @typeName(Type)),
+
+        .Void, .Bool, .Int, .Float, .Enum => {
+            return false;
+        },
+
+        .Pointer => {
+            return true;
+        },
+
+        .Array => |info| {
+            return allocates(info.child);
+        },
+
+        .Struct => |info| {
+            for (info.fields) |field| {
+                return allocates(field.type) orelse continue;
+            }
+        },
+
+        .Optional => |info| {
+            return allocates(info.child);
+        },
+
+        .Union => |info| {
+            for (info.fields) |field| {
+                return allocates(field.type) orelse continue;
+            }
+        },
+    }
+}
+
+fn UnionFieldType(comptime Union: type, comptime tag: anytype) type {
+    const info = @typeInfo(Union).Union;
+    for (info.fields) |field| {
+        if (std.mem.eql(u8, @tagName(tag), field.name)) {
+            return field.type;
+        }
+    }
+
+    @compileError("`tag` is not a valid tag value of " ++ @typeName(Union));
 }
 
 const testing = std.testing;
@@ -360,9 +542,15 @@ test "float serde" {
     try testing.expectEqual(@as(f128, -30.0), try serde(f128, -30.0));
 }
 
+test "pointer serde" {
+    const ptr = try serde(*const u8, &@as(u8, 10));
+    defer destroy(*const u8, ptr, testing.allocator);
+    try testing.expectEqual(ptr.*, 10);
+}
+
 test "slice serde" {
     const slice = try serde([]const u8, &[_]u8{ 10, 50, 100, 150, 200 });
-    defer testing.allocator.free(slice);
+    defer destroy([]const u8, slice, testing.allocator);
     try testing.expectEqualDeep(@as([]const u8, &[_]u8{ 10, 50, 100, 150, 200 }), slice);
 }
 

@@ -268,10 +268,8 @@ const testing = std.testing;
 const StrMessage = struct {
     str: ?[]const u8,
 
-    fn deinit(self: @This()) void {
-        if (self.str) |s| {
-            testing.allocator.free(s);
-        }
+    fn deinit(self: StrMessage) void {
+        serde.destroy(StrMessage, self, testing.allocator);
     }
 };
 const MessageReader = Reader(StrMessage);
