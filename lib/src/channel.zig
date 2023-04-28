@@ -27,10 +27,18 @@ pub fn Reader(comptime Message: type) type {
             self.buf.deinit();
         }
 
-        pub fn read(
+        pub fn read(self: *Self, allocator: std.mem.Allocator) Error!Message {
+            return self.readImpl(null, allocator);
+        }
+
+        pub fn readFor(self: *Self, timeout: u32, allocator: std.mem.Allocator) Error!?Message {
+            return self.readImpl(timeout, allocator);
+        }
+
+        fn readImpl(
             self: *Self,
+            timeout: anytype,
             allocator: std.mem.Allocator,
-            comptime timeout: ?u32,
         ) Error!if (timeout == null) Message else ?Message {
             self.buf.clearRetainingCapacity();
             while (true) {
@@ -88,10 +96,18 @@ pub fn Writer(comptime Message: type) type {
             self.buf.deinit();
         }
 
-        pub fn write(
+        pub fn write(self: *Self, msg: Message) Error!void {
+            try self.writeImpl(null, msg);
+        }
+
+        pub fn writeFor(self: *Self, timeout: u32, msg: Message) Error!bool {
+            return self.writeImpl(timeout, msg);
+        }
+
+        fn writeImpl(
             self: *Self,
+            timeout: anytype,
             msg: Message,
-            comptime timeout: ?u32,
         ) Error!if (timeout == null) void else bool {
             self.buf.clearRetainingCapacity();
             try serde.serialize(Message, msg, &.{
@@ -280,14 +296,14 @@ const Child = struct {
 
     fn run(self: *Child) !void {
         while (true) {
-            const msg = try self.reader.read(testing.allocator, null);
+            const msg = try self.reader.read(testing.allocator);
             defer msg.deinit();
 
             if (msg.str == null) {
                 break;
             }
 
-            try self.writer.write(msg, null);
+            try self.writer.write(msg);
         }
 
         self.reader.deinit();
@@ -311,9 +327,9 @@ test "channel io without timeout" {
             2 => null,
             else => unreachable,
         };
-        try writer.write(StrMessage{ .str = str }, null);
+        try writer.write(StrMessage{ .str = str });
         if (str != null) {
-            const msg = try reader.read(testing.allocator, null);
+            const msg = try reader.read(testing.allocator);
             defer msg.deinit();
             try testing.expectEqualDeep(str, msg.str);
         }
