@@ -1,5 +1,6 @@
 pub const define = @import("define.zig");
 pub const definition = @import("definition.zig");
+pub const render = @import("render.zig");
 
 pub const CommandScheme = definition.CommandScheme;
 pub const FunctionScheme = definition.FunctionScheme;
