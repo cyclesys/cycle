@@ -45,11 +45,7 @@ const SerializeState = union(enum) {
 
                 const start = fixed.len;
                 const end = fixed.len + bytes.len;
-                @memcpy(
-                    @ptrCast([*]u8, fixed.buf[start..end]),
-                    @ptrCast([*]const u8, bytes),
-                    bytes.len,
-                );
+                @memcpy(fixed.buf[start..end], bytes);
                 fixed.len += bytes.len;
             },
         }
@@ -189,7 +185,7 @@ const DeserializeState = struct {
         }
 
         var out: [size]u8 = undefined;
-        @memcpy(&out, @ptrCast([*]const u8, self.buf[self.pos..(self.pos + size)]), size);
+        @memcpy(&out, self.buf[self.pos..(self.pos + size)]);
 
         self.pos += size;
 
