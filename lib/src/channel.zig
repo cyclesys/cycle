@@ -1,11 +1,19 @@
 const std = @import("std");
-const windows = @import("win32").everything;
+const windows = struct {
+    const mod = @import("win32");
+    usingnamespace mod.foundation;
+    usingnamespace mod.system.memory;
+    usingnamespace mod.system.threading;
+    usingnamespace mod.system.windows_programming;
+};
+
 const serde = @import("serde.zig");
+const SharedMem = @import("SharedMem.zig");
 
 pub const Error = error{
-    InvalidHandle,
-    ChannelInvalidated,
-} || serde.Error;
+    CreateChannelFailed,
+    ChannelInvalid,
+} || serde.Error || SharedMem.Error;
 
 const ByteList = std.ArrayList(u8);
 
@@ -51,14 +59,14 @@ pub fn Reader(comptime Message: type) type {
                 const remaining = try serde.deserialize(usize, &.{
                     // it shouldn't allocate any memory to deserialize a `usize`
                     .allocator = undefined,
-                    .buf = self.chan.view,
+                    .buf = self.chan.mem.view,
                 });
 
                 if (first_wait) {
                     try self.buf.ensureTotalCapacity(Cursor.msg_size + remaining);
                 }
 
-                try self.buf.appendSlice(self.chan.view[Cursor.msg_start..]);
+                try self.buf.appendSlice(self.chan.mem.view[Cursor.msg_start..]);
                 try self.chan.signal();
 
                 if (remaining == 0) {
@@ -116,7 +124,7 @@ pub fn Writer(comptime Message: type) type {
 
             var remaining = self.buf.items.len;
             var cursor = Cursor{
-                .dest = self.chan.view,
+                .dest = self.chan.mem.view,
                 .source = self.buf.items,
             };
 
@@ -170,13 +178,12 @@ const Cursor = struct {
 pub const Channel = struct {
     wait_ev: windows.HANDLE,
     signal_ev: windows.HANDLE,
-    file: windows.HANDLE,
-    view: []u8,
+    mem: SharedMem,
     first_wait: bool = true,
 
-    const size = 4 * 1024;
+    const size = 1 * 1024;
 
-    pub fn create(start_owned: bool) Error!Channel {
+    pub fn init(start_owned: bool) Error!Channel {
         const wait_ev = windows.CreateEventW(
             null,
             1,
@@ -189,80 +196,58 @@ pub const Channel = struct {
             @intCast(windows.BOOL, @boolToInt(!start_owned)),
             null,
         );
-        const file = windows.CreateFileMappingW(
-            windows.INVALID_HANDLE_VALUE,
-            null,
-            windows.PAGE_READWRITE,
-            0,
-            size,
-            null,
-        );
 
-        if (wait_ev == null or signal_ev == null or file == null) {
-            return error.InvalidHandle;
+        if (wait_ev == null or signal_ev == null) {
+            return error.CreateChannelFailed;
         }
+
+        const mem = try SharedMem.init(size);
 
         return Channel{
             .wait_ev = wait_ev.?,
             .signal_ev = signal_ev.?,
-            .file = file.?,
-            .view = try createView(file.?),
+            .mem = mem,
         };
     }
 
-    pub fn open(wait_ev: windows.HANDLE, signal_ev: windows.HANDLE, file: windows.HANDLE) Error!Channel {
+    pub fn import(
+        wait_ev: windows.HANDLE,
+        signal_ev: windows.HANDLE,
+        file: windows.HANDLE,
+    ) Error!Channel {
+        const mem = try SharedMem.import(file, size);
         return Channel{
             .wait_ev = wait_ev,
             .signal_ev = signal_ev,
-            .file = file,
-            .view = try createView(file),
+            .mem = mem,
         };
     }
 
-    pub fn destroy(self: *const Channel) !void {
-        if (windows.CloseHandle(self.wait_ev) == 0 or
-            windows.CloseHandle(self.signal_ev) == 0 or
-            windows.CloseHandle(self.file) == 0 or
-            windows.UnmapViewOfFile(@ptrCast(*const anyopaque, self.view)) == 0)
-        {
-            return error.InvalidHandle;
-        }
+    pub fn deinit(self: *Channel) !void {
+        _ = windows.CloseHandle(self.wait_ev);
+        _ = windows.CloseHandle(self.signal_ev);
+        self.mem.deinit();
     }
 
     pub fn reversed(self: *const Channel) Channel {
         return Channel{
             .wait_ev = self.signal_ev,
             .signal_ev = self.wait_ev,
-            .file = self.file,
-            .view = self.view,
+            .mem = self.mem,
             .first_wait = true,
         };
     }
 
-    inline fn createView(file: windows.HANDLE) ![]u8 {
-        const ptr = windows.MapViewOfFile(file, windows.FILE_MAP_ALL_ACCESS, 0, 0, size);
-
-        if (ptr == null) {
-            return error.InvalidHandle;
-        }
-
-        var view: []u8 = undefined;
-        view.ptr = @ptrCast([*]u8, ptr.?);
-        view.len = size;
-
-        return view;
-    }
-
-    fn wait(self: *Channel, comptime timeout: ?u32) Error!bool {
-        const ms = if (timeout != null and self.first_wait) timeout.? else windows.INFINITE;
+    fn wait(self: *Channel, timeout: ?u32) Error!bool {
+        const wait_for = if (timeout != null and self.first_wait) timeout.? else windows.INFINITE;
         self.first_wait = false;
 
-        const result = windows.WaitForSingleObject(self.wait_ev, ms);
+        const result = windows.WaitForSingleObject(self.wait_ev, wait_for);
         return switch (result) {
             windows.WAIT_OBJECT_0 => true,
             @enumToInt(windows.WAIT_TIMEOUT) => if (timeout == null) false else error.ChannelInvalid,
-            windows.WAIT_ABANDONED => error.ChannelInvalidated,
-            @enumToInt(windows.WAIT_FAILED) => error.ChannelInvalidated,
+            windows.WAIT_ABANDONED => error.ChannelInvalid,
+            @enumToInt(windows.WAIT_FAILED) => error.ChannelInvalid,
             else => unreachable,
         };
     }
@@ -271,7 +256,7 @@ pub const Channel = struct {
         if (windows.ResetEvent(self.wait_ev) == 0 or
             windows.SetEvent(self.signal_ev) == 0)
         {
-            return error.ChannelInvalidated;
+            return error.ChannelInvalid;
         }
     }
 
@@ -312,8 +297,8 @@ const Child = struct {
 };
 
 test "channel io without timeout" {
-    var reader = MessageReader.init(testing.allocator, try Channel.create(false));
-    var writer = MessageWriter.init(testing.allocator, try Channel.create(true));
+    var reader = MessageReader.init(testing.allocator, try Channel.init(false));
+    var writer = MessageWriter.init(testing.allocator, try Channel.init(true));
 
     const child = try std.Thread.spawn(.{}, Child.run, .{&Child{
         .reader = MessageReader.init(testing.allocator, writer.chan.reversed()),
@@ -337,8 +322,8 @@ test "channel io without timeout" {
 
     child.join();
 
-    try reader.chan.destroy();
-    try writer.chan.destroy();
+    try reader.chan.deinit();
+    try writer.chan.deinit();
     reader.deinit();
     writer.deinit();
 }
