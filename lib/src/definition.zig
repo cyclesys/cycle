@@ -333,7 +333,7 @@ pub const ObjectScheme = struct {
         }
     }
 
-    fn dependencies(comptime Scheme: type) []const type {
+    pub fn dependencies(comptime Scheme: type) []const type {
         comptime {
             var result: []const type = &[_]type{};
             for (Scheme.scheme_types) |Type| {
@@ -353,7 +353,7 @@ pub const ObjectScheme = struct {
         }
     }
 
-    fn mergeTypes(comptime left: []const type, comptime right: []const type) []const type {
+    pub fn mergeTypes(comptime left: []const type, comptime right: []const type) []const type {
         comptime {
             var result = left;
             outer: for (right) |Right| {
@@ -367,7 +367,7 @@ pub const ObjectScheme = struct {
         }
     }
 
-    fn mergeSchemes(comptime deps: []const ObjectScheme) []const ObjectScheme {
+    pub fn mergeSchemes(comptime deps: []const ObjectScheme) []const ObjectScheme {
         const result = comptime blk: {
             var schemes: [deps.len]ObjectScheme = undefined;
             var len = 0;
@@ -415,7 +415,7 @@ pub const ObjectScheme = struct {
         return result;
     }
 
-    fn from(comptime Scheme: type) ObjectScheme {
+    pub fn from(comptime Scheme: type) ObjectScheme {
         if (Scheme.scheme_kind != .object) {
             @compileError("scheme is not an object scheme");
         }
@@ -438,8 +438,8 @@ pub const ObjectScheme = struct {
 pub const FieldType = union(enum) {
     Void: void,
     Bool: void,
-    Int: Int,
-    Float: u16,
+    Int: std.builtin.Type.Int,
+    Float: std.builtin.Type.Float,
     Optional: *const FieldType,
     Ref: Ref,
     Array: Array,
@@ -451,58 +451,39 @@ pub const FieldType = union(enum) {
     Union: Union,
     Enum: Enum,
 
-    pub const Int = struct {
-        signed: bool,
-        bits: u16,
-    };
-
     pub const Array = struct {
-        size: usize,
-        element_type: *const FieldType,
+        len: usize,
+        child: *const FieldType,
     };
 
     pub const Map = struct {
-        key_type: *const FieldType,
-        value_type: *const FieldType,
+        key: *const FieldType,
+        value: *const FieldType,
     };
 
     pub const StructField = struct {
         name: []const u8,
-        field_type: FieldType,
+        type: FieldType,
     };
 
     pub const Union = struct {
-        tag_type: bool,
+        is_tagged: bool,
         fields: []const UnionField,
+    };
 
-        pub const UnionField = struct {
-            name: []const u8,
-            field_type: FieldType,
-        };
+    pub const UnionField = struct {
+        name: []const u8,
+        type: FieldType,
     };
 
     pub const Enum = struct {
-        bits: u16,
-        fields: union(enum) {
-            signed: []const SignedField,
-            unsigned: []const UnsignedField,
-        },
-
-        pub const SignedField = struct {
-            name: []const u8,
-            // TODO: make this var-width int?
-            value: isize,
-        };
-
-        pub const UnsignedField = struct {
-            name: []const u8,
-            // TODO: make this var-width int?
-            value: usize,
-        };
+        tag: std.builtin.Type.Int,
+        fields: []const EnumField,
     };
 
     pub const EnumField = struct {
         name: []const u8,
+        // TODO: make this var-width int?
         value: union(enum) {
             signed: isize,
             unsigned: usize,
@@ -528,12 +509,12 @@ pub const FieldType = union(enum) {
             },
             .Int => {
                 return right == .Int and
-                    left.Int.signed == right.Int.signed and
+                    left.Int.signedness == right.Int.signedness and
                     left.Int.bits == right.Int.bits;
             },
             .Float => {
                 return right == .Float and
-                    left.Float == right.Float;
+                    left.Float.bits == right.Float.bits;
             },
             .Optional => {
                 return right == .Optional and
@@ -545,8 +526,8 @@ pub const FieldType = union(enum) {
             },
             .Array => {
                 return right == .Array and
-                    left.Array.size == right.Array.size and
-                    FieldType.eql(left.Array.element_type.*, right.Array.element_type.*);
+                    left.Array.len == right.Array.len and
+                    FieldType.eql(left.Array.child.*, right.Array.child.*);
             },
             .List => {
                 return right == .List and
@@ -554,8 +535,8 @@ pub const FieldType = union(enum) {
             },
             .Map => {
                 return right == .Map and
-                    FieldType.eql(left.Map.key_type.*, right.Map.key_type.*) and
-                    FieldType.eql(left.Map.value_type.*, right.Map.value_type.*);
+                    FieldType.eql(left.Map.key.*, right.Map.key.*) and
+                    FieldType.eql(left.Map.value.*, right.Map.value.*);
             },
             .String => {
                 return right == .String;
@@ -567,7 +548,7 @@ pub const FieldType = union(enum) {
 
                 for (left.Struct, right.Struct) |left_field, right_field| {
                     if (!std.mem.eql(u8, left_field.name, right_field.name) or
-                        !FieldType.eql(left_field.field_type, right_field.field_type))
+                        !FieldType.eql(left_field.type, right_field.type))
                     {
                         return false;
                     }
@@ -590,7 +571,7 @@ pub const FieldType = union(enum) {
             },
             .Union => {
                 if (right != .Union or
-                    left.Union.tag_type != right.Union.tag_type or
+                    left.Union.is_tagged != right.Union.is_tagged or
                     left.Union.fields.len != right.Union.fields.len)
                 {
                     return false;
@@ -598,7 +579,7 @@ pub const FieldType = union(enum) {
 
                 for (left.Union.fields, right.Union.fields) |left_field, right_field| {
                     if (!std.mem.eql(u8, left_field.name, right_field.name) or
-                        !FieldType.eql(left_field.field_type, right_field.field_type))
+                        !FieldType.eql(left_field.type, right_field.type))
                     {
                         return false;
                     }
@@ -607,41 +588,35 @@ pub const FieldType = union(enum) {
                 return true;
             },
             .Enum => {
-                if (right != .Enum or left.Enum.bits != right.Enum.bits) {
+                if (right != .Enum or
+                    left.Enum.tag.signedness != right.Enum.tag.signedness or
+                    left.Enum.tag.bits != right.Enum.tag.bits or
+                    left.Enum.fields.len != right.Enum.fields.len)
+                {
                     return false;
                 }
 
-                switch (left.Enum.fields) {
-                    .signed => |left_fields| {
-                        if (right.Enum.fields != .signed or
-                            left_fields.len != right.Enum.fields.signed.len)
-                        {
-                            return false;
-                        }
+                for (left.Enum.fields, right.Enum.fields) |left_field, right_field| {
+                    if (!std.mem.eql(u8, left_field.name, right_field.name)) {
+                        return false;
+                    }
 
-                        for (left_fields, right.Enum.fields.signed) |left_field, right_field| {
-                            if (!std.mem.eql(u8, left_field.name, right_field.name) or
-                                left_field.value != right_field.value)
+                    switch (left_field.value) {
+                        .signed => {
+                            if (right_field.value != .signed or
+                                left_field.value.signed != right_field.value.signed)
                             {
                                 return false;
                             }
-                        }
-                    },
-                    .unsigned => |left_fields| {
-                        if (right.Enum.fields != .unsigned or
-                            left_fields.len != right.Enum.fields.unsigned.len)
-                        {
-                            return false;
-                        }
-
-                        for (left_fields, right.Enum.fields.unsigned) |left_field, right_field| {
-                            if (!std.mem.eql(u8, left_field.name, right_field.name) or
-                                left_field.value != right_field.value)
+                        },
+                        .unsigned => {
+                            if (right_field.value != .unsigned or
+                                left_field.value.unsigned != right_field.value.unsigned)
                             {
                                 return false;
                             }
-                        }
-                    },
+                        },
+                    }
                 }
 
                 return true;
@@ -649,7 +624,7 @@ pub const FieldType = union(enum) {
         }
     }
 
-    fn from(comptime Type: type) ?FieldType {
+    pub fn from(comptime Type: type) ?FieldType {
         switch (@typeInfo(Type)) {
             .Void => {
                 return FieldType.Void;
@@ -659,15 +634,12 @@ pub const FieldType = union(enum) {
             },
             .Int => |info| {
                 return FieldType{
-                    .Int = Int{
-                        .signed = info.signedness == .signed,
-                        .bits = info.bits,
-                    },
+                    .Int = info,
                 };
             },
             .Float => |info| {
                 return FieldType{
-                    .Float = info.bits,
+                    .Float = info,
                 };
             },
             .Optional => |info| {
@@ -697,11 +669,11 @@ pub const FieldType = union(enum) {
                         },
                         .array => {
                             const result = comptime blk: {
-                                const element_type = FieldType.from(Type.element_type).?;
+                                const child = FieldType.from(Type.element_type).?;
                                 break :blk FieldType{
                                     .Array = Array{
-                                        .size = Type.array_size,
-                                        .element_type = &element_type,
+                                        .len = Type.array_size,
+                                        .child = &child,
                                     },
                                 };
                             };
@@ -709,21 +681,21 @@ pub const FieldType = union(enum) {
                         },
                         .list => {
                             const result = comptime blk: {
-                                const element_type = FieldType.from(Type.element_type).?;
+                                const child = FieldType.from(Type.element_type).?;
                                 break :blk FieldType{
-                                    .List = &element_type,
+                                    .List = &child,
                                 };
                             };
                             return result;
                         },
                         .map => {
                             const result = comptime blk: {
-                                const key_type = FieldType.from(Type.key_type).?;
-                                const value_type = FieldType.from(Type.value_type).?;
+                                const key = FieldType.from(Type.key_type).?;
+                                const value = FieldType.from(Type.value_type).?;
                                 break :blk FieldType{
                                     .Map = Map{
-                                        .key_type = &key_type,
-                                        .value_type = &value_type,
+                                        .key = &key,
+                                        .value = &value,
                                     },
                                 };
                             };
@@ -761,7 +733,7 @@ pub const FieldType = union(enum) {
                                 if (FieldType.from(field.type)) |field_type| {
                                     fields[len] = StructField{
                                         .name = field.name,
-                                        .field_type = field_type,
+                                        .type = field_type,
                                     };
                                     len += 1;
                                 }
@@ -776,20 +748,20 @@ pub const FieldType = union(enum) {
             },
             .Union => |info| {
                 const result = comptime blk: {
-                    var fields: [info.fields.len]Union.UnionField = undefined;
+                    var fields: [info.fields.len]UnionField = undefined;
                     var len = 0;
                     for (info.fields) |field| {
                         if (FieldType.from(field.type)) |field_type| {
-                            fields[len] = Union.UnionField{
+                            fields[len] = UnionField{
                                 .name = field.name,
-                                .field_type = field_type,
+                                .type = field_type,
                             };
                             len += 1;
                         }
                     }
                     break :blk FieldType{
                         .Union = Union{
-                            .tag_type = info.tag_type != null,
+                            .is_tagged = info.tag_type != null,
                             .fields = fields[0..len],
                         },
                     };
@@ -798,25 +770,22 @@ pub const FieldType = union(enum) {
             },
             .Enum => |info| {
                 const result = comptime blk: {
-                    const tag_info = @typeInfo(info.tag_type).Int;
-                    const EnumFieldType = if (tag_info.signedness == .signed) Enum.SignedField else Enum.UnsignedField;
-
-                    var fields: [info.fields.len]EnumFieldType = undefined;
+                    const tag = @typeInfo(info.tag_type).Int;
+                    var fields: [info.fields.len]EnumField = undefined;
                     for (info.fields, 0..) |field, i| {
-                        fields[i] = EnumFieldType{
+                        fields[i] = EnumField{
                             .name = field.name,
-                            .value = field.value,
+                            .value = if (field.value < 0)
+                                .{ .signed = field.value }
+                            else
+                                .{ .unsigned = field.value },
                         };
                     }
 
                     break :blk FieldType{
                         .Enum = .{
-                            .bits = tag_info.bits,
-                            .fields = if (tag_info.signedness == .signed) .{
-                                .signed = fields[0..],
-                            } else .{
-                                .unsigned = fields[0..],
-                            },
+                            .tag = tag,
+                            .fields = &fields,
                         },
                     };
                 };
@@ -867,7 +836,7 @@ test "int field type" {
     try expectFieldTypeEql(
         FieldType{
             .Int = .{
-                .signed = true,
+                .signedness = .signed,
                 .bits = 8,
             },
         },
@@ -877,7 +846,7 @@ test "int field type" {
     try expectFieldTypeEql(
         FieldType{
             .Int = .{
-                .signed = false,
+                .signedness = .unsigned,
                 .bits = 8,
             },
         },
@@ -886,7 +855,7 @@ test "int field type" {
 }
 
 test "float field type" {
-    try expectFieldTypeEql(FieldType{ .Float = 16 }, FieldType.from(f16));
+    try expectFieldTypeEql(FieldType{ .Float = .{ .bits = 16 } }, FieldType.from(f16));
 }
 
 test "optional field type" {
@@ -894,7 +863,7 @@ test "optional field type" {
         FieldType{
             .Optional = &FieldType{
                 .Int = .{
-                    .signed = false,
+                    .signedness = .unsigned,
                     .bits = 8,
                 },
             },
@@ -924,8 +893,8 @@ test "array field type" {
     try expectFieldTypeEql(
         FieldType{
             .Array = .{
-                .size = 32,
-                .element_type = &FieldType{
+                .len = 32,
+                .child = &FieldType{
                     .Bool = undefined,
                 },
             },
@@ -949,8 +918,8 @@ test "map field type" {
     try expectFieldTypeEql(
         FieldType{
             .Map = .{
-                .key_type = &FieldType{ .Bool = undefined },
-                .value_type = &FieldType{ .Bool = undefined },
+                .key = &FieldType{ .Bool = undefined },
+                .value = &FieldType{ .Bool = undefined },
             },
         },
         FieldType.from(define.Map(bool, bool)),
@@ -970,11 +939,11 @@ test "struct field type" {
     const expected = .{
         FieldType.StructField{
             .name = "one",
-            .field_type = FieldType.Bool,
+            .type = FieldType.Bool,
         },
         FieldType.StructField{
             .name = "two",
-            .field_type = FieldType.String,
+            .type = FieldType.String,
         },
     };
     try expectFieldTypeEql(
@@ -1007,20 +976,20 @@ test "tuple field type" {
 
 test "union field type" {
     const expected_fields = .{
-        FieldType.Union.UnionField{
+        FieldType.UnionField{
             .name = "One",
-            .field_type = FieldType.Bool,
+            .type = FieldType.Bool,
         },
-        FieldType.Union.UnionField{
+        FieldType.UnionField{
             .name = "Two",
-            .field_type = FieldType.String,
+            .type = FieldType.String,
         },
     };
 
     try expectFieldTypeEql(
         FieldType{
             .Union = .{
-                .tag_type = true,
+                .is_tagged = true,
                 .fields = &expected_fields,
             },
         },
@@ -1033,7 +1002,7 @@ test "union field type" {
     try expectFieldTypeEql(
         FieldType{
             .Union = .{
-                .tag_type = false,
+                .is_tagged = false,
                 .fields = &expected_fields,
             },
         },
@@ -1048,17 +1017,15 @@ test "enum field type" {
     try expectFieldTypeEql(
         FieldType{
             .Enum = .{
-                .bits = 8,
-                .fields = .{
-                    .signed = &.{
-                        FieldType.Enum.SignedField{
-                            .name = "One",
-                            .value = -100,
-                        },
-                        FieldType.Enum.SignedField{
-                            .name = "Two",
-                            .value = 100,
-                        },
+                .tag = @typeInfo(i8).Int,
+                .fields = &.{
+                    FieldType.EnumField{
+                        .name = "One",
+                        .value = .{ .signed = -100 },
+                    },
+                    FieldType.EnumField{
+                        .name = "Two",
+                        .value = .{ .unsigned = 100 },
                     },
                 },
             },
@@ -1072,17 +1039,15 @@ test "enum field type" {
     try expectFieldTypeEql(
         FieldType{
             .Enum = .{
-                .bits = 8,
-                .fields = .{
-                    .unsigned = &.{
-                        FieldType.Enum.UnsignedField{
-                            .name = "One",
-                            .value = 100,
-                        },
-                        FieldType.Enum.UnsignedField{
-                            .name = "Two",
-                            .value = 200,
-                        },
+                .tag = @typeInfo(u8).Int,
+                .fields = &.{
+                    FieldType.EnumField{
+                        .name = "One",
+                        .value = .{ .unsigned = 100 },
+                    },
+                    FieldType.EnumField{
+                        .name = "Two",
+                        .value = .{ .unsigned = 200 },
                     },
                 },
             },
@@ -1181,7 +1146,7 @@ test "object scheme dependencies" {
                             .Struct = &.{
                                 FieldType.StructField{
                                     .name = "obj1",
-                                    .field_type = FieldType{
+                                    .type = FieldType{
                                         .Ref = Ref{
                                             .scheme_name = "scheme/dep1",
                                             .type_name = "Obj",
@@ -1420,7 +1385,7 @@ test "function scheme" {
                                     .Struct = &.{
                                         .{
                                             .name = "obj1",
-                                            .field_type = FieldType{
+                                            .type = FieldType{
                                                 .Ref = .{
                                                     .scheme_name = "dep1",
                                                     .type_name = "Obj",
@@ -1429,7 +1394,7 @@ test "function scheme" {
                                         },
                                         .{
                                             .name = "obj2",
-                                            .field_type = FieldType{
+                                            .type = FieldType{
                                                 .Ref = .{
                                                     .scheme_name = "dep2",
                                                     .type_name = "Obj",
@@ -1693,7 +1658,7 @@ test "command scheme" {
                                     .Struct = &.{
                                         .{
                                             .name = "obj1",
-                                            .field_type = FieldType{
+                                            .type = FieldType{
                                                 .Ref = .{
                                                     .scheme_name = "dep1",
                                                     .type_name = "Obj",
@@ -1702,7 +1667,7 @@ test "command scheme" {
                                         },
                                         .{
                                             .name = "obj2",
-                                            .field_type = FieldType{
+                                            .type = FieldType{
                                                 .Ref = .{
                                                     .scheme_name = "dep2",
                                                     .type_name = "Obj",
