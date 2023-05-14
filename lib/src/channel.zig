@@ -56,11 +56,11 @@ pub fn Reader(comptime Message: type) type {
                     return null;
                 }
 
-                const remaining = try serde.deserialize(usize, &.{
+                const remaining = try serde.deserialize(usize, @constCast(&.{
                     // it shouldn't allocate any memory to deserialize a `usize`
                     .allocator = undefined,
                     .buf = self.chan.mem.view,
-                });
+                }));
 
                 if (first_wait) {
                     try self.buf.ensureTotalCapacity(Cursor.msg_size + remaining);
@@ -76,10 +76,10 @@ pub fn Reader(comptime Message: type) type {
 
             self.chan.reset();
 
-            const msg = try serde.deserialize(Message, &.{
+            const msg = try serde.deserialize(Message, @constCast(&.{
                 .allocator = allocator,
                 .buf = self.buf.items,
-            });
+            }));
 
             return msg;
         }
@@ -118,9 +118,9 @@ pub fn Writer(comptime Message: type) type {
             msg: Message,
         ) Error!if (timeout == null) void else bool {
             self.buf.clearRetainingCapacity();
-            try serde.serialize(Message, msg, &.{
+            try serde.serialize(Message, msg, @constCast(&.{
                 .list = &self.buf,
-            });
+            }));
 
             var remaining = self.buf.items.len;
             var cursor = Cursor{
@@ -164,9 +164,9 @@ const Cursor = struct {
     const msg_size = Channel.size - msg_start;
 
     fn write(self: *Cursor, remaining: usize, len: usize) !void {
-        try serde.serialize(usize, remaining, &.{
+        try serde.serialize(usize, remaining, @constCast(&.{
             .fixed = .{ .buf = self.dest },
-        });
+        }));
 
         const msg_bytes = self.source[self.pos..(self.pos + len)];
         self.pos += len;
@@ -300,10 +300,10 @@ test "channel io without timeout" {
     var reader = MessageReader.init(testing.allocator, try Channel.init(false));
     var writer = MessageWriter.init(testing.allocator, try Channel.init(true));
 
-    const child = try std.Thread.spawn(.{}, Child.run, .{&Child{
+    const child = try std.Thread.spawn(.{}, Child.run, .{@constCast(&Child{
         .reader = MessageReader.init(testing.allocator, writer.chan.reversed()),
         .writer = MessageWriter.init(testing.allocator, reader.chan.reversed()),
-    }});
+    })});
 
     for (0..3) |i| {
         const str: ?[]const u8 = switch (i) {

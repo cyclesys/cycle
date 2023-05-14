@@ -75,27 +75,11 @@ pub fn serialize(comptime Type: type, value: Type, state: *SerializeState) Error
         .Bool => {
             try state.write(if (value) 1 else 0);
         },
-        .Int => |info| {
-            const size = @sizeOf(Type);
-            const IntCast = @Type(.{
-                .Int = .{
-                    .signedness = info.signedness,
-                    .bits = size * 8,
-                },
-            });
-
-            const cast_value = @intCast(IntCast, value);
-            try state.writeSlice(&@bitCast([size]u8, cast_value));
-        },
-        .Float => {
-            const size = @sizeOf(Type);
-            const FloatCast = @Type(.{
-                .Float = .{
-                    .bits = size * 8,
-                },
-            });
-            const cast_value = @floatCast(FloatCast, value);
-            try state.writeSlice(&@bitCast([size]u8, cast_value));
+        .Int, .Float => {
+            var slice: []const u8 = undefined;
+            slice.ptr = @ptrCast([*]const u8, &value);
+            slice.len = @sizeOf(Type);
+            try state.writeSlice(slice);
         },
         .Pointer => |info| {
             switch (info.size) {
@@ -221,28 +205,10 @@ pub fn deserialize(comptime Type: type, state: *DeserializeState) Error!Type {
                 else => error.DeserializeInvalidBool,
             };
         },
-        .Int => |info| {
-            const size = @sizeOf(Type);
-            const IntCast = @Type(.{
-                .Int = .{
-                    .signedness = info.signedness,
-                    .bits = size * 8,
-                },
-            });
-
-            const cast_value = @bitCast(IntCast, try state.read(size));
-
-            return @intCast(Type, cast_value);
-        },
-        .Float => {
-            const size = @sizeOf(Type);
-            const FloatCast = @Type(.{
-                .Float = .{
-                    .bits = size * 8,
-                },
-            });
-            const cast_value = @bitCast(FloatCast, try state.read(size));
-            return @floatCast(Type, cast_value);
+        .Int, .Float => {
+            var bytes = try state.read(@sizeOf(Type));
+            var value_ptr = @ptrCast(*Type, @alignCast(@alignOf(Type), &bytes));
+            return value_ptr.*;
         },
         .Pointer => |info| {
             switch (info.size) {
@@ -507,8 +473,8 @@ const testing = std.testing;
 fn serde(comptime Type: type, value: Type) !Type {
     var buf = ByteList.init(testing.allocator);
     defer buf.deinit();
-    try serialize(Type, value, &.{ .list = &buf });
-    return deserialize(Type, &DeserializeState{ .allocator = testing.allocator, .buf = buf.items });
+    try serialize(Type, value, @constCast(&.{ .list = &buf }));
+    return deserialize(Type, @constCast(&DeserializeState{ .allocator = testing.allocator, .buf = buf.items }));
 }
 
 test "bool serde" {
