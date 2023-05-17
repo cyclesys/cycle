@@ -16,13 +16,13 @@ const DefKind = enum {
 
 pub const SchemeFn = fn (comptime anytype) type;
 
-pub fn Scheme(comptime name: []const u8, comptime types: anytype) SchemeFn {
-    if (types.len == 0) {
+pub fn Scheme(comptime scheme_name: []const u8, comptime scheme_types: anytype) SchemeFn {
+    if (scheme_types.len == 0) {
         @compileError("`types` cannot be empty");
     }
 
-    comptime var kind: ?DefKind = null;
-    for (types, 0..) |Type, i| {
+    comptime var scheme_kind: ?DefKind = null;
+    for (scheme_types, 0..) |Type, i| {
         if (!@hasDecl(Type, "def_kind")) {
             @compileError("`types` can only contain `Object`, `Function`, or `Command` types");
         }
@@ -32,34 +32,34 @@ pub fn Scheme(comptime name: []const u8, comptime types: anytype) SchemeFn {
             else => @compileError("`types` can only contain `Object`, `Function`, or `Command` types"),
         }
 
-        if (kind != null and (Type.def_kind != kind.?)) {
+        if (scheme_kind != null and (Type.def_kind != scheme_kind.?)) {
             @compileError("`types` can only types of the same kind " ++
                 "(i.e. if it has `Object` types it can only contain `Object` types, etc.)");
         }
 
         for (0..i) |ii| {
-            if (std.mem.eql(u8, types[ii].type_name, Type.type_name)) {
-                @compileError("duplicate type name found: " ++ Type.type_name);
+            if (std.mem.eql(u8, scheme_types[ii].name, Type.name)) {
+                @compileError("duplicate type name found: " ++ Type.name);
             }
         }
 
-        kind = Type.def_kind;
+        scheme_kind = Type.def_kind;
     }
 
-    for (types) |Type| {
+    for (scheme_types) |Type| {
         switch (Type.def_kind) {
-            .object => checkObject(Type.type_versions, types),
-            .function => checkFunction(Type.type_versions),
-            .command => checkCommandFieldType(Type.field_type, false),
+            .object => checkObject(Type.versions, scheme_types),
+            .function => checkFunction(Type.versions),
+            .command => checkCommandField(Type.field, false),
             else => unreachable,
         }
     }
 
     return struct {
         pub const def_kind = DefKind.scheme;
-        pub const scheme_kind = kind.?;
-        pub const scheme_name = name;
-        pub const scheme_types = types;
+        pub const kind = scheme_kind.?;
+        pub const name = scheme_name;
+        pub const types = scheme_types;
 
         const Self = @This();
 
@@ -69,11 +69,11 @@ pub fn Scheme(comptime name: []const u8, comptime types: anytype) SchemeFn {
             }
 
             for (types) |Type| {
-                if (std.mem.eql(u8, Type.type_name, arg)) {
+                if (std.mem.eql(u8, Type.name, arg)) {
                     return struct {
                         pub const def_kind = DefKind.ref;
-                        pub const type_def = Type;
-                        pub const type_scheme = Self;
+                        pub const def = Type;
+                        pub const scheme = Self;
                     };
                 }
             }
@@ -83,57 +83,57 @@ pub fn Scheme(comptime name: []const u8, comptime types: anytype) SchemeFn {
     }.get;
 }
 
-pub fn Object(comptime name: []const u8, comptime versions: anytype) type {
+pub fn Object(comptime object_name: []const u8, comptime object_versions: anytype) type {
     return struct {
         pub const def_kind = DefKind.object;
-        pub const type_name = name;
-        pub const type_versions = versions;
+        pub const name = object_name;
+        pub const versions = object_versions;
     };
 }
 
-pub fn Function(comptime name: []const u8, comptime versions: anytype) type {
+pub fn Function(comptime function_name: []const u8, comptime function_versions: anytype) type {
     return struct {
         pub const def_kind = DefKind.function;
-        pub const type_name = name;
-        pub const type_versions = versions;
+        pub const name = function_name;
+        pub const versions = function_versions;
     };
 }
 
-pub fn Command(comptime name: []const u8, comptime Field: type) type {
+pub fn Command(comptime command_name: []const u8, comptime Field: type) type {
     return struct {
         pub const def_kind = DefKind.command;
-        pub const type_name = name;
-        pub const field_type = Field;
+        pub const name = command_name;
+        pub const field = Field;
     };
 }
 
-pub fn This(comptime name: []const u8) type {
+pub fn This(comptime type_name: []const u8) type {
     return struct {
         pub const def_kind = DefKind.this;
-        pub const type_name = name;
+        pub const name = type_name;
     };
 }
 
-pub fn Array(comptime size: comptime_int, comptime Element: type) type {
+pub fn Array(comptime length: comptime_int, comptime Child: type) type {
     return struct {
         pub const def_kind = DefKind.array;
-        pub const array_size = size;
-        pub const element_type = Element;
+        pub const len = length;
+        pub const child = Child;
     };
 }
 
-pub fn List(comptime Element: type) type {
+pub fn List(comptime Child: type) type {
     return struct {
         pub const def_kind = DefKind.list;
-        pub const element_type = Element;
+        pub const child = Child;
     };
 }
 
 pub fn Map(comptime Key: type, comptime Value: type) type {
     return struct {
         pub const def_kind = DefKind.map;
-        pub const key_type = Key;
-        pub const value_type = Value;
+        pub const key = Key;
+        pub const value = Value;
     };
 }
 
@@ -147,7 +147,7 @@ pub const Ignore = struct {
 
 fn checkObject(comptime versions: anytype, comptime scheme_types: anytype) void {
     for (versions) |Ver| {
-        checkFieldType(Ver, scheme_types, false);
+        checkField(Ver, scheme_types, false);
     }
 }
 
@@ -157,160 +157,158 @@ fn checkFunction(comptime versions: anytype) void {
             .Fn => |fn_info| {
                 for (fn_info.params) |param_info| {
                     if (param_info.type == null) {
-                        @compileError("field type is invalid");
+                        @compileError("field is invalid");
                     }
 
-                    checkFieldType(param_info.type.?, .{}, false);
+                    checkField(param_info.type.?, .{}, false);
                 }
 
-                checkFieldType(fn_info.return_type.?, .{}, false);
+                checkField(fn_info.return_type.?, .{}, false);
             },
             else => @compileError("`Function` type can only contain `fn` types"),
         }
     }
 }
 
-fn checkFieldType(
+fn checkField(
     comptime Field: type,
     comptime scheme_types: anytype,
     comptime allow_ignore: bool,
 ) void {
     switch (@typeInfo(Field)) {
-        .Type => @compileError("field type cannot be type."),
-        .NoReturn => @compileError("field type cannot be noreturn"),
-        .Pointer => @compileError("field type cannot be pointer"),
-        .Array => @compileError("field type cannot be native array, use `Array` type instead."),
-        .ComptimeFloat => @compileError("field type cannot be comptime_float"),
-        .ComptimeInt => @compileError("field type cannot be comptime_int"),
-        .Undefined => @compileError("field type cannot be undefined"),
-        .Null => @compileError("field type cannot be null"),
-        .ErrorUnion => @compileError("field type cannot be error union"),
-        .ErrorSet => @compileError("field type cannot be error set"),
-        .Fn => @compileError("field type cannot be fn"),
-        .Opaque => @compileError("field type cannot be opaque"),
-        .Frame => @compileError("field type cannot be frame"),
-        .AnyFrame => @compileError("field type cannot be anyframe"),
-        .Vector => @compileError("field type cannot be vector"),
-        .EnumLiteral => @compileError("field type cannot be enum literal"),
+        .Type => @compileError("field cannot be type."),
+        .NoReturn => @compileError("field cannot be noreturn"),
+        .Pointer => @compileError("field cannot be pointer"),
+        .Array => @compileError("field cannot be native array, use `Array` type instead."),
+        .ComptimeFloat => @compileError("field cannot be comptime_float"),
+        .ComptimeInt => @compileError("field cannot be comptime_int"),
+        .Undefined => @compileError("field cannot be undefined"),
+        .Null => @compileError("field cannot be null"),
+        .ErrorUnion => @compileError("field cannot be error union"),
+        .ErrorSet => @compileError("field cannot be error set"),
+        .Fn => @compileError("field cannot be fn"),
+        .Opaque => @compileError("field cannot be opaque"),
+        .Frame => @compileError("field cannot be frame"),
+        .AnyFrame => @compileError("field cannot be anyframe"),
+        .Vector => @compileError("field cannot be vector"),
+        .EnumLiteral => @compileError("field cannot be enum literal"),
         .Void, .Bool, .Int, .Float, .Enum => {
             // these types are valid
         },
         .Optional => |info| {
-            checkFieldType(info.child, scheme_types, false);
+            checkField(info.child, scheme_types, false);
         },
         .Struct => |info| {
             if (@hasDecl(Field, "def_kind")) {
                 switch (Field.def_kind) {
-                    .scheme => @compileError("field type cannot be `Scheme` type"),
-                    .object => @compileError("field type cannot be `Object` type"),
-                    .function => @compileError("field type cannot be `Function` type"),
-                    .command => @compileError("field type cannot be `Command` type"),
+                    .scheme => @compileError("field cannot be `Scheme` type"),
+                    .object => @compileError("field cannot be `Object` type"),
+                    .function => @compileError("field cannot be `Function` type"),
+                    .command => @compileError("field cannot be `Command` type"),
                     .this => {
                         if (scheme_types.len == 0) {
-                            @compileError("field type cannot be `This` type");
+                            @compileError("field cannot be `This` type");
                         }
 
                         for (scheme_types) |T| {
-                            if (std.mem.eql(u8, T.type_name, Field.type_name)) {
+                            if (std.mem.eql(u8, T.name, Field.name)) {
                                 break;
                             }
                         } else {
-                            @compileError(Field.type_name ++ " is not defined in the scheme referenced by `This`.");
+                            @compileError(Field.name ++ " is not defined in the scheme referenced by `This`.");
                         }
                     },
                     .ref => {
-                        checkRefType(Field);
+                        checkRef(Field);
                     },
                     .array => {
-                        checkFieldType(Field.element_type, scheme_types, false);
+                        checkField(Field.child, scheme_types, false);
                     },
                     .list => {
-                        checkFieldType(Field.element_type, scheme_types, false);
+                        checkField(Field.child, scheme_types, false);
                     },
                     .map => {
-                        checkFieldType(Field.key_type, scheme_types, false);
-                        checkFieldType(Field.value_type, scheme_types, false);
+                        checkField(Field.key, scheme_types, false);
+                        checkField(Field.value, scheme_types, false);
                     },
                     .string => {
                         // valid
                     },
                     .ignore => {
                         if (!allow_ignore) {
-                            @compileError("field type cannot be `Ignore` type");
+                            @compileError("field cannot be `Ignore` type");
                         }
                     },
                 }
             } else {
-                for (info.fields) |field_info| {
-                    if (field_info.is_comptime) {
+                for (info.fields) |field| {
+                    if (field.is_comptime) {
                         @compileError("struct fields cannot be comptime.");
                     }
 
-                    checkFieldType(field_info.type, scheme_types, true);
-                }
-            }
-        },
-        .Union => |info| {
-            for (info.fields) |field_info| {
-                checkFieldType(field_info.type, scheme_types, true);
-            }
-        },
-    }
-}
-
-fn checkCommandFieldType(comptime Field: type, comptime allow_void: bool) void {
-    const err = struct {
-        fn invoke() void {
-            @compileError("invalid `Command` field type");
-        }
-    };
-    switch (@typeInfo(Field)) {
-        .Void => if (!allow_void) err.invoke(),
-        .Struct => |info| {
-            if (@hasDecl(Field, "def_kind")) {
-                switch (Field.def_kind) {
-                    .array => {
-                        checkCommandFieldType(Field.element_type, false);
-                    },
-                    .list => {
-                        checkCommandFieldType(Field.element_type, false);
-                    },
-                    .ref => {
-                        checkRefType(Field);
-                    },
-                    else => {
-                        err.invoke();
-                    },
-                }
-            } else {
-                for (info.fields) |field_info| {
-                    checkCommandFieldType(field_info.type, false);
+                    checkField(field.type, scheme_types, true);
                 }
             }
         },
         .Union => |info| {
             if (info.tag_type == null) {
-                err.invoke();
+                @compileError("field union types must be tagged");
             }
-
-            for (info.fields) |field_info| {
-                checkCommandFieldType(field_info.type, true);
+            for (info.fields) |field| {
+                checkField(field.type, scheme_types, true);
             }
         },
-        else => err.invoke(),
     }
 }
 
-fn checkRefType(comptime Ref: type) void {
-    switch (Ref.type_def.def_kind) {
+fn checkCommandField(comptime Field: type, comptime allow_void: bool) void {
+    switch (@typeInfo(Field)) {
+        .Void => if (!allow_void) @compileError("void not allowed here"),
+        .Struct => |info| {
+            if (@hasDecl(Field, "def_kind")) {
+                switch (Field.def_kind) {
+                    .array => {
+                        checkCommandField(Field.child, false);
+                    },
+                    .list => {
+                        checkCommandField(Field.child, false);
+                    },
+                    .ref => {
+                        checkRef(Field);
+                    },
+                    else => {
+                        @compileError("invalid Command field");
+                    },
+                }
+            } else {
+                for (info.fields) |field| {
+                    checkCommandField(field.type, false);
+                }
+            }
+        },
+        .Union => |info| {
+            if (info.tag_type == null) {
+                @compileError("field union types must be tagged");
+            }
+
+            for (info.fields) |field| {
+                checkCommandField(field.type, true);
+            }
+        },
+        else => @compileError("invalid `Command` field"),
+    }
+}
+
+fn checkRef(comptime Ref: type) void {
+    switch (Ref.def.def_kind) {
         .object => {
             // valid
         },
         .function => {
-            @compileError("field type cannot be `Function` ref type");
+            @compileError("field cannot be `Function` ref type");
         },
         .command => {
-            @compileError("field type cannot be `Command` ref type");
+            @compileError("field cannot be `Command` ref type");
         },
         else => unreachable,
     }

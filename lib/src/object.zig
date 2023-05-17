@@ -52,8 +52,8 @@ pub fn ObjectIndex(comptime scheme_fns: anytype) type {
             var scheme_slot_types: [schemes.len]type = undefined;
             for (schemes, 0..) |scheme, i| {
                 var object_slot_types: [scheme.objects.len]type = undefined;
-                for (0..scheme.objects.len) |_| {
-                    object_slot_types[i] = std.AutoHashMap(u64, SharedMem);
+                for (0..scheme.objects.len) |ii| {
+                    object_slot_types[ii] = std.AutoHashMap(u64, SharedMem);
                 }
                 scheme_slot_types[i] = Tuple(object_slot_types);
             }
@@ -61,18 +61,18 @@ pub fn ObjectIndex(comptime scheme_fns: anytype) type {
         };
 
         fn objInfo(
-            comptime scheme_name: []const u8,
-            comptime object_name: []const u8,
+            comptime scheme: []const u8,
+            comptime name: []const u8,
         ) definition.ObjectScheme.Object {
             comptime {
-                for (schemes) |scheme| {
-                    if (!std.mem.eql(u8, scheme_name, scheme.name)) {
+                for (schemes) |sch| {
+                    if (!std.mem.eql(u8, scheme, sch.name)) {
                         continue;
                     }
 
-                    for (scheme.objects) |object| {
-                        if (std.mem.eql(u8, object_name, object.name)) {
-                            return object;
+                    for (scheme.objects) |info| {
+                        if (std.mem.eql(u8, name, info.name)) {
+                            return info;
                         }
                     }
                 }
@@ -85,15 +85,15 @@ pub fn ObjectIndex(comptime scheme_fns: anytype) type {
         };
 
         fn objTypeSlot(comptime Obj: type) ObjSlot {
-            return objSlot(Obj.type_scheme.scheme_name, Obj.type_def.type_name);
+            return objSlot(Obj.scheme.name, Obj.def.name);
         }
 
-        fn objSlot(comptime scheme_name: []const u8, comptime object_name: []const u8) ObjSlot {
+        fn objSlot(comptime scheme: []const u8, comptime name: []const u8) ObjSlot {
             comptime {
-                for (schemes, 0..) |scheme, i| {
-                    if (std.mem.eql(u8, scheme.name, scheme_name)) {
-                        for (scheme.objects, 0..) |object, ii| {
-                            if (std.mem.eql(u8, object.name, object_name)) {
+                for (schemes, 0..) |sch, i| {
+                    if (std.mem.eql(u8, scheme, sch.name)) {
+                        for (scheme.objects, 0..) |obj, ii| {
+                            if (std.mem.eql(u8, name, obj.name)) {
                                 return ObjSlot{
                                     .scheme = i,
                                     .type = ii,
@@ -103,7 +103,7 @@ pub fn ObjectIndex(comptime scheme_fns: anytype) type {
                     }
                 }
 
-                @compileError(object_name ++ " is not defined wihtin this ObjectIndex.");
+                @compileError(name ++ " is not defined wihtin this ObjectIndex.");
             }
         }
 
@@ -166,8 +166,8 @@ pub fn ObjectIndex(comptime scheme_fns: anytype) type {
             if (mem) |m| {
                 return readObject(
                     Self,
-                    Obj.type_scheme.scheme_name,
-                    Obj.type_def.type_name,
+                    Obj.scheme.name,
+                    Obj.def.name,
                     self,
                     m.view,
                 );
@@ -177,16 +177,16 @@ pub fn ObjectIndex(comptime scheme_fns: anytype) type {
         }
 
         fn ObjTypeView(comptime Obj: type) type {
-            return ObjectView(Self, Obj.type_scheme.scheme_name, Obj.type_def.type_name);
+            return ObjectView(Self, Obj.scheme.name, Obj.def.name);
         }
 
         fn getMem(
             self: *Self,
-            comptime scheme_name: []const u8,
-            comptime object_name: []const u8,
+            comptime scheme: []const u8,
+            comptime name: []const u8,
             id: u64,
         ) ?*SharedMem {
-            const slot = comptime objSlot(scheme_name, object_name);
+            const slot = comptime objSlot(scheme, name);
             const map = &self.slots[slot.scheme][slot.type];
             return map.getPtr(id);
         }
@@ -251,15 +251,15 @@ fn ObjectIterator(comptime Index: type, comptime Obj: type) type {
 
 fn ObjectView(
     comptime Index: type,
-    comptime scheme_name: []const u8,
-    comptime object_name: []const u8,
+    comptime scheme: []const u8,
+    comptime name: []const u8,
 ) type {
-    const info = Index.objInfo(scheme_name, object_name);
+    const info = Index.objInfo(scheme, name);
 
     var union_fields: [info.versions.len + 1]std.builtin.Type.UnionField = undefined;
     for (info.versions, 0..) |ver_info, i| {
         const tag_name = verFieldName(i);
-        const VersionField = FieldTypeView(Index, scheme_name, ver_info);
+        const VersionField = FieldTypeView(Index, scheme, ver_info);
         union_fields[i] = .{
             .name = tag_name,
             .type = VersionField,
@@ -323,7 +323,7 @@ fn numFieldName(comptime num: comptime_int) []const u8 {
 
 fn FieldTypeView(
     comptime Index: type,
-    comptime scheme_name: []const u8,
+    comptime scheme: []const u8,
     comptime info: definition.FieldType,
 ) type {
     return switch (info) {
@@ -331,27 +331,27 @@ fn FieldTypeView(
         .Bool => bool,
         .Int => |int_info| @Type(.{ .Int = int_info }),
         .Float => |float_info| @Type(.{ .Float = float_info }),
-        .Optional => |child_info| ?FieldTypeView(Index, scheme_name, child_info.*),
+        .Optional => |child_info| ?FieldTypeView(Index, scheme, child_info.*),
         .Ref => |ref_info| RefView(
             Index,
-            ref_info.scheme_name orelse scheme_name,
-            ref_info.type_name,
+            ref_info.scheme orelse scheme,
+            ref_info.name,
         ),
-        .Array => |array_info| ArrayView(Index, scheme_name, array_info),
-        .List => |child_info| ListView(Index, scheme_name, child_info.*),
-        .Map => |map_info| MapView(Index, scheme_name, map_info),
+        .Array => |array_info| ArrayView(Index, scheme, array_info),
+        .List => |child_info| ListView(Index, scheme, child_info.*),
+        .Map => |map_info| MapView(Index, scheme, map_info),
         .String => []const u8,
-        .Struct => |fields| StructView(Index, scheme_name, fields),
-        .Tuple => |fields| TupleView(Index, scheme_name, fields),
-        .Union => |union_info| UnionView(Index, scheme_name, union_info),
+        .Struct => |fields| StructView(Index, scheme, fields),
+        .Tuple => |fields| TupleView(Index, scheme, fields),
+        .Union => |union_info| UnionView(Index, scheme, union_info),
         .Enum => |enum_info| EnumView(enum_info),
     };
 }
 
 fn RefView(
     comptime Index: type,
-    comptime scheme_name: []const u8,
-    comptime object_name: []const u8,
+    comptime scheme: []const u8,
+    comptime name: []const u8,
 ) type {
     return struct {
         index: *Index,
@@ -359,12 +359,12 @@ fn RefView(
 
         const Self = @This();
 
-        const ViewType = ObjectView(Index, scheme_name, object_name);
+        const ViewType = ObjectView(Index, scheme, name);
 
         pub fn read(self: *const Self) ?ViewType {
-            const mem = self.index.getMem(scheme_name, object_name, self.id);
+            const mem = self.index.getMem(scheme, name, self.id);
             if (mem) |m| {
-                return readObject(Index, scheme_name, object_name, self.index, m.view);
+                return readObject(Index, scheme, name, self.index, m.view);
             }
             return null;
         }
@@ -373,7 +373,7 @@ fn RefView(
 
 fn ArrayView(
     comptime Index: type,
-    comptime scheme_name: []const u8,
+    comptime scheme: []const u8,
     comptime info: definition.FieldType.Array,
 ) type {
     return struct {
@@ -382,7 +382,7 @@ fn ArrayView(
         bytes: []const u8,
 
         const Self = @This();
-        const ChildView = FieldTypeView(Index, scheme_name, info.child.*);
+        const ChildView = FieldTypeView(Index, scheme, info.child.*);
 
         pub fn read(self: *const Self, idx: usize) ChildView {
             if (info.len == 0) {
@@ -400,7 +400,7 @@ fn ArrayView(
 
 fn ListView(
     comptime Index: type,
-    comptime scheme_name: []const u8,
+    comptime scheme: []const u8,
     comptime child_info: definition.FieldType,
 ) type {
     return struct {
@@ -410,7 +410,7 @@ fn ListView(
         bytes: []const u8,
 
         const Self = @This();
-        const ChildView = FieldTypeView(Index, scheme_name, child_info);
+        const ChildView = FieldTypeView(Index, scheme, child_info);
 
         pub fn read(self: *const Self, idx: usize) ChildView {
             if (idx >= self.len) {
@@ -443,7 +443,7 @@ inline fn readChildAt(
 
 fn MapView(
     comptime Index: type,
-    comptime scheme_name: []const u8,
+    comptime scheme: []const u8,
     comptime info: definition.FieldType.Map,
 ) type {
     return struct {
@@ -453,8 +453,8 @@ fn MapView(
         bytes: []const u8,
 
         const Self = @This();
-        const KeyView = FieldTypeView(Index, scheme_name, info.key.*);
-        const ValueView = FieldTypeView(Index, scheme_name, info.value.*);
+        const KeyView = FieldTypeView(Index, scheme, info.key.*);
+        const ValueView = FieldTypeView(Index, scheme, info.value.*);
         pub const KeyValue = struct {
             key: KeyView,
             value: ValueView,
@@ -516,13 +516,13 @@ fn MapView(
 
 fn StructView(
     comptime Index: type,
-    comptime scheme_name: []const u8,
+    comptime scheme: []const u8,
     comptime fields: []const definition.FieldType.StructField,
 ) type {
     comptime {
         var struct_fields: [fields.len]std.builtin.Type.StructField = undefined;
         for (fields, 0..) |field, i| {
-            const FieldType = FieldTypeView(Index, scheme_name, field.type);
+            const FieldType = FieldTypeView(Index, scheme, field.type);
             struct_fields[i] = .{
                 .name = field.name,
                 .type = FieldType,
@@ -545,13 +545,13 @@ fn StructView(
 
 fn TupleView(
     comptime Index: type,
-    comptime scheme_name: []const u8,
+    comptime scheme: []const u8,
     comptime fields: []const definition.FieldType,
 ) type {
     comptime {
         var field_types: [fields.len]type = undefined;
         for (fields, 0..) |field, i| {
-            field_types[i] = FieldTypeView(Index, scheme_name, field);
+            field_types[i] = FieldTypeView(Index, scheme, field);
         }
         return Tuple(field_types);
     }
@@ -559,7 +559,7 @@ fn TupleView(
 
 fn UnionView(
     comptime Index: type,
-    comptime scheme_name: []const u8,
+    comptime scheme: []const u8,
     comptime fields: []const definition.FieldType.UnionField,
 ) type {
     comptime {
@@ -571,7 +571,7 @@ fn UnionView(
                 .value = i,
             };
 
-            const FieldType = FieldTypeView(Index, scheme_name, field.type);
+            const FieldType = FieldTypeView(Index, scheme, field.type);
             union_fields[i] = .{
                 .name = field.name,
                 .type = FieldType,
@@ -625,13 +625,13 @@ fn Read(comptime T: type) type {
 
 fn readObject(
     comptime Index: type,
-    comptime scheme_name: []const u8,
-    comptime object_name: []const u8,
+    comptime scheme: []const u8,
+    comptime name: []const u8,
     index: *Index,
     bytes: []const u8,
-) ObjectView(Index, scheme_name, object_name) {
-    const View = ObjectView(Index, scheme_name, object_name);
-    const info = comptime Index.objInfo(scheme_name, object_name);
+) ObjectView(Index, scheme, name) {
+    const View = ObjectView(Index, scheme, name);
+    const info = comptime Index.objInfo(scheme, name);
 
     const read_version = readNum(u16, bytes);
     const version = read_version.value;

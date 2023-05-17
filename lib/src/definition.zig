@@ -8,7 +8,7 @@ pub const CommandScheme = struct {
 
     pub const Command = struct {
         name: []const u8,
-        field_type: CommandFieldType,
+        field: CommandFieldType,
 
         const CommandFieldType = union(enum) {
             Ref: Ref,
@@ -19,17 +19,17 @@ pub const CommandScheme = struct {
 
             pub const StructField = struct {
                 name: []const u8,
-                field_type: CommandFieldType,
+                type: CommandFieldType,
             };
 
             pub const UnionField = struct {
                 name: []const u8,
-                field_type: ?CommandFieldType,
+                type: ?CommandFieldType,
             };
 
             pub const Array = struct {
-                size: usize,
-                element_type: *const CommandFieldType,
+                len: usize,
+                child: *const CommandFieldType,
             };
 
             fn from(comptime Type: type) CommandFieldType {
@@ -41,7 +41,7 @@ pub const CommandScheme = struct {
                                 for (info.fields, 0..) |field, i| {
                                     fields[i] = .{
                                         .name = field.name,
-                                        .field_type = CommandFieldType.from(field.type),
+                                        .type = CommandFieldType.from(field.type),
                                     };
                                 }
                                 break :blk CommandFieldType{
@@ -54,11 +54,11 @@ pub const CommandScheme = struct {
                         switch (Type.def_kind) {
                             .array => {
                                 const result = comptime blk: {
-                                    const element_type = CommandFieldType.from(Type.element_type);
+                                    const child = CommandFieldType.from(Type.child);
                                     break :blk CommandFieldType{
                                         .Array = Array{
-                                            .size = Type.array_size,
-                                            .element_type = &element_type,
+                                            .len = Type.len,
+                                            .child = &child,
                                         },
                                     };
                                 };
@@ -66,9 +66,9 @@ pub const CommandScheme = struct {
                             },
                             .list => {
                                 const result = comptime blk: {
-                                    const element_type = CommandFieldType.from(Type.element_type);
+                                    const child = CommandFieldType.from(Type.child);
                                     break :blk CommandFieldType{
-                                        .List = &element_type,
+                                        .List = &child,
                                     };
                                 };
                                 return result;
@@ -85,7 +85,7 @@ pub const CommandScheme = struct {
                             for (info.fields, 0..) |field, i| {
                                 fields[i] = .{
                                     .name = field.name,
-                                    .field_type = if (field.type == void) null else CommandFieldType.from(field.type),
+                                    .type = if (field.type == void) null else CommandFieldType.from(field.type),
                                 };
                             }
                             break :blk CommandFieldType{
@@ -101,28 +101,28 @@ pub const CommandScheme = struct {
 
         fn from(comptime Type: type) Command {
             return Command{
-                .name = Type.type_name,
-                .field_type = CommandFieldType.from(Type.field_type),
+                .name = Type.name,
+                .field = CommandFieldType.from(Type.field),
             };
         }
     };
 
     pub fn from(comptime SchemeFn: define.SchemeFn) CommandScheme {
         const Scheme = SchemeFn(define.This);
-        if (Scheme.scheme_kind != .command) {
+        if (Scheme.kind != .command) {
             @compileError("scheme is not a command scheme");
         }
 
         const result = comptime blk: {
-            var commands: [Scheme.scheme_types.len]Command = undefined;
-            for (Scheme.scheme_types, 0..) |Type, i| {
+            var commands: [Scheme.types.len]Command = undefined;
+            for (Scheme.types, 0..) |Type, i| {
                 commands[i] = Command.from(Type);
             }
 
             var dependency_types: []const type = &[_]type{};
-            for (Scheme.scheme_types) |Type| {
+            for (Scheme.types) |Type| {
                 var deps: []const type = &[_]type{};
-                for (ObjectScheme.types(Type.field_type)) |Dep| {
+                for (ObjectScheme.types(Type.field)) |Dep| {
                     deps = ObjectScheme.mergeTypes(deps, &[_]type{Dep});
                     deps = ObjectScheme.mergeTypes(deps, ObjectScheme.dependencies(Dep));
                 }
@@ -135,7 +135,7 @@ pub const CommandScheme = struct {
             }
 
             break :blk CommandScheme{
-                .name = Scheme.scheme_name,
+                .name = Scheme.name,
                 .commands = commands[0..],
                 .dependencies = ObjectScheme.mergeSchemes(dependencies[0..]),
             };
@@ -181,12 +181,12 @@ pub const FunctionScheme = struct {
 
         fn from(comptime Type: type) Function {
             const result = comptime blk: {
-                var versions: [Type.type_versions.len]Version = undefined;
-                for (Type.type_versions, 0..) |Ver, i| {
+                var versions: [Type.versions.len]Version = undefined;
+                for (Type.versions, 0..) |Ver, i| {
                     versions[i] = Version.from(Ver);
                 }
                 break :blk Function{
-                    .name = Type.type_name,
+                    .name = Type.name,
                     .versions = versions[0..],
                 };
             };
@@ -196,19 +196,19 @@ pub const FunctionScheme = struct {
 
     pub fn from(comptime SchemeFn: define.SchemeFn) FunctionScheme {
         const Scheme = SchemeFn(define.This);
-        if (Scheme.scheme_kind != .function) {
+        if (Scheme.kind != .function) {
             @compileError("scheme is not a function scheme");
         }
 
         const result = comptime blk: {
-            var functions: [Scheme.scheme_types.len]Function = undefined;
-            for (Scheme.scheme_types, 0..) |Type, i| {
+            var functions: [Scheme.types.len]Function = undefined;
+            for (Scheme.types, 0..) |Type, i| {
                 functions[i] = Function.from(Type);
             }
 
             var dependency_types: []const type = &[_]type{};
-            for (Scheme.scheme_types) |Type| {
-                for (Type.type_versions) |Ver| {
+            for (Scheme.types) |Type| {
+                for (Type.versions) |Ver| {
                     var deps: []const type = &[_]type{};
                     for (ObjectScheme.types(Ver)) |Dep| {
                         deps = ObjectScheme.mergeTypes(deps, &[_]type{Dep});
@@ -224,7 +224,7 @@ pub const FunctionScheme = struct {
             }
 
             break :blk FunctionScheme{
-                .name = Scheme.scheme_name,
+                .name = Scheme.name,
                 .functions = functions[0..],
                 .dependencies = ObjectScheme.mergeSchemes(dependencies[0..]),
             };
@@ -261,7 +261,7 @@ pub const ObjectScheme = struct {
             for (0..matching_len) |i| {
                 if (!FieldType.eql(left.versions[i], right.versions[i])) {
                     @compileError("encountered differing field types for object " ++ left.name ++
-                        "at version " ++ &[_]u8{i + 1});
+                        "at version " ++ &[_]u8{i});
                 }
             }
 
@@ -270,12 +270,12 @@ pub const ObjectScheme = struct {
 
         fn from(comptime Type: type) Object {
             const result = comptime blk: {
-                var versions: [Type.type_versions.len]FieldType = undefined;
-                for (Type.type_versions, 0..) |Ver, i| {
+                var versions: [Type.versions.len]FieldType = undefined;
+                for (Type.versions, 0..) |Ver, i| {
                     versions[i] = FieldType.from(Ver).?;
                 }
                 break :blk Object{
-                    .name = Type.type_name,
+                    .name = Type.name,
                     .versions = versions[0..],
                 };
             };
@@ -299,15 +299,15 @@ pub const ObjectScheme = struct {
                                 return &[_]type{};
                             },
                             .ref => {
-                                return &[_]type{Type.type_scheme};
+                                return &[_]type{Type.scheme};
                             },
                             .array, .list => {
-                                return ObjectScheme.types(Type.element_type);
+                                return ObjectScheme.types(Type.child);
                             },
                             .map => {
                                 return ObjectScheme.mergeTypes(
-                                    ObjectScheme.types(Type.key_type),
-                                    ObjectScheme.types(Type.value_type),
+                                    ObjectScheme.types(Type.key),
+                                    ObjectScheme.types(Type.value),
                                 );
                             },
                             else => @compileError("unexpected field type"),
@@ -336,8 +336,8 @@ pub const ObjectScheme = struct {
     pub fn dependencies(comptime Scheme: type) []const type {
         comptime {
             var result: []const type = &[_]type{};
-            for (Scheme.scheme_types) |Type| {
-                for (Type.type_versions) |Ver| {
+            for (Scheme.types) |Type| {
+                for (Type.versions) |Ver| {
                     var deps: []const type = &[_]type{};
                     for (ObjectScheme.types(Ver)) |Dep| {
                         if (Dep == Scheme)
@@ -416,17 +416,17 @@ pub const ObjectScheme = struct {
     }
 
     pub fn from(comptime Scheme: type) ObjectScheme {
-        if (Scheme.scheme_kind != .object) {
+        if (Scheme.kind != .object) {
             @compileError("scheme is not an object scheme");
         }
 
         const result = comptime blk: {
-            var objects: [Scheme.scheme_types.len]Object = undefined;
-            for (Scheme.scheme_types, 0..) |Type, i| {
+            var objects: [Scheme.types.len]Object = undefined;
+            for (Scheme.types, 0..) |Type, i| {
                 objects[i] = Object.from(Type);
             }
             break :blk ObjectScheme{
-                .name = Scheme.scheme_name,
+                .name = Scheme.name,
                 .objects = objects[0..],
             };
         };
@@ -622,8 +622,8 @@ pub const FieldType = union(enum) {
                         .this => {
                             return FieldType{
                                 .Ref = Ref{
-                                    .scheme_name = null,
-                                    .type_name = Type.type_name,
+                                    .scheme = null,
+                                    .name = Type.name,
                                 },
                             };
                         },
@@ -634,10 +634,10 @@ pub const FieldType = union(enum) {
                         },
                         .array => {
                             const result = comptime blk: {
-                                const child = FieldType.from(Type.element_type).?;
+                                const child = FieldType.from(Type.child).?;
                                 break :blk FieldType{
                                     .Array = Array{
-                                        .len = Type.array_size,
+                                        .len = Type.len,
                                         .child = &child,
                                     },
                                 };
@@ -646,7 +646,7 @@ pub const FieldType = union(enum) {
                         },
                         .list => {
                             const result = comptime blk: {
-                                const child = FieldType.from(Type.element_type).?;
+                                const child = FieldType.from(Type.child).?;
                                 break :blk FieldType{
                                     .List = &child,
                                 };
@@ -655,8 +655,8 @@ pub const FieldType = union(enum) {
                         },
                         .map => {
                             const result = comptime blk: {
-                                const key = FieldType.from(Type.key_type).?;
-                                const value = FieldType.from(Type.value_type).?;
+                                const key = FieldType.from(Type.key).?;
+                                const value = FieldType.from(Type.value).?;
                                 break :blk FieldType{
                                     .Map = Map{
                                         .key = &key,
@@ -755,25 +755,25 @@ pub const FieldType = union(enum) {
 };
 
 pub const Ref = struct {
-    scheme_name: ?[]const u8,
-    type_name: []const u8,
+    scheme: ?[]const u8,
+    name: []const u8,
 
     fn eql(left: Ref, right: Ref) bool {
-        if (left.scheme_name != null) {
-            if (right.scheme_name == null or !std.mem.eql(u8, left.scheme_name.?, right.scheme_name.?)) {
+        if (left.scheme != null) {
+            if (right.scheme == null or !std.mem.eql(u8, left.scheme.?, right.scheme.?)) {
                 return false;
             }
-        } else if (right.scheme_name != null) {
+        } else if (right.scheme != null) {
             return false;
         }
 
-        return std.mem.eql(u8, left.type_name, right.type_name);
+        return std.mem.eql(u8, left.name, right.name);
     }
 
     fn from(comptime Type: type) Ref {
         return Ref{
-            .scheme_name = Type.type_scheme.scheme_name,
-            .type_name = Type.type_def.type_name,
+            .scheme = Type.scheme.name,
+            .name = Type.def.name,
         };
     }
 };
@@ -839,8 +839,8 @@ test "ref field type" {
     try expectFieldTypeEql(
         FieldType{
             .Ref = Ref{
-                .scheme_name = "objs",
-                .type_name = "Obj",
+                .scheme = "objs",
+                .name = "Obj",
             },
         },
         FieldType.from(Objs("Obj")),
@@ -1063,8 +1063,8 @@ test "object scheme dependencies" {
                                     .name = "obj1",
                                     .type = FieldType{
                                         .Ref = Ref{
-                                            .scheme_name = "scheme/dep1",
-                                            .type_name = "Obj",
+                                            .scheme = "scheme/dep1",
+                                            .name = "Obj",
                                         },
                                     },
                                 },
@@ -1144,8 +1144,8 @@ test "object scheme merge" {
                     .versions = &.{
                         FieldType{
                             .Ref = Ref{
-                                .scheme_name = "scheme/dep",
-                                .type_name = "One",
+                                .scheme = "scheme/dep",
+                                .name = "One",
                             },
                         },
                     },
@@ -1246,15 +1246,15 @@ test "function scheme" {
                             .params = &.{
                                 .{
                                     .Ref = .{
-                                        .scheme_name = "dep2",
-                                        .type_name = "Obj",
+                                        .scheme = "dep2",
+                                        .name = "Obj",
                                     },
                                 },
                             },
                             .return_type = .{
                                 .Ref = .{
-                                    .scheme_name = "dep3",
-                                    .type_name = "Obj",
+                                    .scheme = "dep3",
+                                    .name = "Obj",
                                 },
                             },
                         },
@@ -1270,8 +1270,8 @@ test "function scheme" {
                             .versions = &.{
                                 FieldType{
                                     .Ref = .{
-                                        .scheme_name = "dep1",
-                                        .type_name = "Obj",
+                                        .scheme = "dep1",
+                                        .name = "Obj",
                                     },
                                 },
                             },
@@ -1302,8 +1302,8 @@ test "function scheme" {
                                             .name = "obj1",
                                             .type = FieldType{
                                                 .Ref = .{
-                                                    .scheme_name = "dep1",
-                                                    .type_name = "Obj",
+                                                    .scheme = "dep1",
+                                                    .name = "Obj",
                                                 },
                                             },
                                         },
@@ -1311,8 +1311,8 @@ test "function scheme" {
                                             .name = "obj2",
                                             .type = FieldType{
                                                 .Ref = .{
-                                                    .scheme_name = "dep2",
-                                                    .type_name = "Obj",
+                                                    .scheme = "dep2",
+                                                    .name = "Obj",
                                                 },
                                             },
                                         },
@@ -1335,8 +1335,8 @@ test "ref command field type" {
     try expectCommandFieldTypeEql(
         .{
             .Ref = Ref{
-                .scheme_name = "objs",
-                .type_name = "Obj",
+                .scheme = "objs",
+                .name = "Obj",
             },
         },
         CommandScheme.Command.CommandFieldType.from(Objs("Obj")),
@@ -1351,11 +1351,11 @@ test "array command field type" {
     try expectCommandFieldTypeEql(
         .{
             .Array = .{
-                .size = 32,
-                .element_type = &.{
+                .len = 32,
+                .child = &.{
                     .Ref = .{
-                        .scheme_name = "objs",
-                        .type_name = "Obj",
+                        .scheme = "objs",
+                        .name = "Obj",
                     },
                 },
             },
@@ -1373,8 +1373,8 @@ test "list command field type" {
         .{
             .List = &.{
                 .Ref = .{
-                    .scheme_name = "objs",
-                    .type_name = "Obj",
+                    .scheme = "objs",
+                    .name = "Obj",
                 },
             },
         },
@@ -1392,10 +1392,10 @@ test "struct command field type" {
             .Struct = &.{
                 .{
                     .name = "one",
-                    .field_type = .{
+                    .type = .{
                         .Ref = .{
-                            .scheme_name = "objs",
-                            .type_name = "Obj",
+                            .scheme = "objs",
+                            .name = "Obj",
                         },
                     },
                 },
@@ -1417,16 +1417,16 @@ test "union command field type" {
             .Union = &.{
                 .{
                     .name = "One",
-                    .field_type = .{
+                    .type = .{
                         .Ref = .{
-                            .scheme_name = "objs",
-                            .type_name = "Obj",
+                            .scheme = "objs",
+                            .name = "Obj",
                         },
                     },
                 },
                 .{
                     .name = "Two",
-                    .field_type = null,
+                    .type = null,
                 },
             },
         },
@@ -1450,14 +1450,14 @@ test "command" {
     try expectCommandEql(
         .{
             .name = "Cmd",
-            .field_type = .{
+            .field = .{
                 .Struct = &.{
                     .{
                         .name = "obj",
-                        .field_type = .{
+                        .type = .{
                             .Ref = .{
-                                .scheme_name = "objs",
-                                .type_name = "Obj",
+                                .scheme = "objs",
+                                .name = "Obj",
                             },
                         },
                     },
@@ -1510,23 +1510,23 @@ test "command scheme" {
             .commands = &.{
                 .{
                     .name = "Cmd",
-                    .field_type = .{
+                    .field = .{
                         .Struct = &.{
                             .{
                                 .name = "obj2",
-                                .field_type = .{
+                                .type = .{
                                     .Ref = .{
-                                        .scheme_name = "dep2",
-                                        .type_name = "Obj",
+                                        .scheme = "dep2",
+                                        .name = "Obj",
                                     },
                                 },
                             },
                             .{
                                 .name = "obj3",
-                                .field_type = .{
+                                .type = .{
                                     .Ref = .{
-                                        .scheme_name = "dep3",
-                                        .type_name = "Obj",
+                                        .scheme = "dep3",
+                                        .name = "Obj",
                                     },
                                 },
                             },
@@ -1543,8 +1543,8 @@ test "command scheme" {
                             .versions = &.{
                                 FieldType{
                                     .Ref = .{
-                                        .scheme_name = "dep1",
-                                        .type_name = "Obj",
+                                        .scheme = "dep1",
+                                        .name = "Obj",
                                     },
                                 },
                             },
@@ -1575,8 +1575,8 @@ test "command scheme" {
                                             .name = "obj1",
                                             .type = FieldType{
                                                 .Ref = .{
-                                                    .scheme_name = "dep1",
-                                                    .type_name = "Obj",
+                                                    .scheme = "dep1",
+                                                    .name = "Obj",
                                                 },
                                             },
                                         },
@@ -1584,8 +1584,8 @@ test "command scheme" {
                                             .name = "obj2",
                                             .type = FieldType{
                                                 .Ref = .{
-                                                    .scheme_name = "dep2",
-                                                    .type_name = "Obj",
+                                                    .scheme = "dep2",
+                                                    .name = "Obj",
                                                 },
                                             },
                                         },
@@ -1623,7 +1623,7 @@ fn expectCommandEql(expected: CommandScheme.Command, actual: CommandScheme.Comma
         return error.TestExpectedEqual;
     }
 
-    try expectCommandFieldTypeEql(expected.field_type, actual.field_type);
+    try expectCommandFieldTypeEql(expected.field, actual.field);
 }
 
 fn expectCommandFieldTypeEql(expected_opt: ?CommandScheme.Command.CommandFieldType, actual_opt: ?CommandScheme.Command.CommandFieldType) !void {
@@ -1650,7 +1650,7 @@ fn expectCommandFieldTypeEql(expected_opt: ?CommandScheme.Command.CommandFieldTy
                     return error.TestExpectedEqual;
                 }
 
-                try expectCommandFieldTypeEql(exp.field_type, act.field_type);
+                try expectCommandFieldTypeEql(exp.type, act.type);
             }
         },
         .Union => {
@@ -1663,15 +1663,15 @@ fn expectCommandFieldTypeEql(expected_opt: ?CommandScheme.Command.CommandFieldTy
                     return error.TestExpectedEqual;
                 }
 
-                try expectCommandFieldTypeEql(exp.field_type, act.field_type);
+                try expectCommandFieldTypeEql(exp.type, act.type);
             }
         },
         .Array => {
-            if (actual != .Array or expected.Array.size != actual.Array.size) {
+            if (actual != .Array or expected.Array.len != actual.Array.len) {
                 return error.TestExpectedEqual;
             }
 
-            try expectCommandFieldTypeEql(expected.Array.element_type.*, actual.Array.element_type.*);
+            try expectCommandFieldTypeEql(expected.Array.child.*, actual.Array.child.*);
         },
         .List => {
             if (actual != .List) {
