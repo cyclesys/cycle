@@ -155,7 +155,7 @@ pub fn ObjectIndex(comptime scheme_fns: anytype) type {
             }
         }
 
-        pub fn get(self: *Self, comptime Obj: type, id: super.ObjectId) ?ObjTypeView(Obj) {
+        pub fn get(self: *Self, comptime Obj: type, id: super.ObjectId) ?View(Obj) {
             const slot = comptime objTypeSlot(Obj);
             const map = &self.slots[slot.scheme][slot.type];
             const mem = map.getPtr(@bitCast(u64, id));
@@ -171,10 +171,6 @@ pub fn ObjectIndex(comptime scheme_fns: anytype) type {
             return null;
         }
 
-        fn ObjTypeView(comptime Obj: type) type {
-            return ObjectView(Self, Obj.scheme.name, Obj.def.name);
-        }
-
         fn getMem(
             self: *Self,
             comptime scheme: []const u8,
@@ -184,6 +180,27 @@ pub fn ObjectIndex(comptime scheme_fns: anytype) type {
             const slot = comptime objSlot(scheme, name);
             const map = &self.slots[slot.scheme][slot.type];
             return map.getPtr(id);
+        }
+
+        pub fn iterator(self: *Self, comptime Obj: type) Iterator(Obj) {
+            const slot = comptime objTypeSlot(Obj);
+            const map = &self.slots[slot.scheme][slot.type];
+            return .{
+                .index = self,
+                .iter = map.iterator(),
+            };
+        }
+
+        pub fn View(comptime Obj: type) type {
+            return ObjectView(Self, Obj.scheme.name, Obj.def.name);
+        }
+
+        pub fn Iterator(comptime Obj: type) type {
+            return ObjectIterator(Self, Obj.scheme.name, Obj.def.name);
+        }
+
+        pub fn Entry(comptime Obj: type) type {
+            return ObjectIterator(Self, Obj.scheme.name, Obj.def.name).Entry;
         }
     };
 }
@@ -232,14 +249,31 @@ fn IndexEnum(comptime num_fields: comptime_int) type {
     }
 }
 
-fn ObjectIterator(comptime Index: type, comptime Obj: type) type {
-    _ = Index;
-    _ = Obj;
+fn ObjectIterator(comptime Index: type, comptime scheme: []const u8, comptime name: []const u8) type {
     return struct {
+        index: *Index,
+        iter: std.AutoHashMap(u64, SharedMem).Iterator,
+
         const Self = @This();
 
-        pub fn next(self: *Self) void {
-            _ = self;
+        pub const Entry = struct {
+            id: super.ObjectId,
+            view: ObjectView(Index, scheme, name),
+        };
+
+        pub fn next(self: *Self) ?Entry {
+            if (self.iter.next()) |entry| {
+                const id = @bitCast(super.ObjectId, entry.key_ptr.*);
+
+                const mem = entry.value_ptr;
+                const view = readObject(Index, scheme, name, self.index, mem.view);
+
+                return .{
+                    .id = id,
+                    .view = view,
+                };
+            }
+            return null;
         }
     };
 }
@@ -1125,14 +1159,10 @@ test "ref view" {
     var ref_view = ref.read();
     try std.testing.expect(ref_view == null);
 
-    try index.put(.{
-        .type = test_type,
-        .id = ref_id,
-        .mem = try createObjMem(u64, @bitCast(u64, ref_id), 0),
-    });
-
+    try putObj(&index, ref_id, u64, @bitCast(u64, test_obj), 0);
     ref_view = ref.read();
     try std.testing.expect(ref_view != null);
+    try std.testing.expectEqual(@bitCast(u64, test_obj), ref_view.?.v1.id);
 }
 
 test "string view" {
@@ -1299,18 +1329,17 @@ test "union view" {
         Ref: define.This("Obj"),
     };
     const Scheme = testScheme(Union);
-
     const Value = union(enum) {
         Int: u8,
         Str: []const u8,
         Ref: super.ObjectId,
     };
+
     var value = Value{
         .Int = 10,
     };
     var index = try testIndex(Scheme, Union, value);
     defer deinitTestIndex(&index, null);
-
     var view = index.get(Scheme("Obj"), test_obj).?;
     try std.testing.expectEqualDeep(@tagName(value), @tagName(view.v1));
     try std.testing.expectEqual(value.Int, view.v1.Int);
@@ -1318,13 +1347,7 @@ test "union view" {
     value = Value{
         .Str = "string",
     };
-    var old_mem = try index.putMem(.{
-        .type = test_type,
-        .id = test_obj,
-        .mem = try createObjMem(Union, value, 0),
-    });
-    std.testing.allocator.free(old_mem.?.view);
-
+    try putObj(&index, test_obj, Union, value, 0);
     view = index.get(Scheme("Obj"), test_obj).?;
     try std.testing.expectEqualDeep(@tagName(value), @tagName(view.v1));
     try std.testing.expectEqualDeep(value.Str, view.v1.Str);
@@ -1332,13 +1355,7 @@ test "union view" {
     value = Value{
         .Ref = test_obj,
     };
-    old_mem = try index.putMem(.{
-        .type = test_type,
-        .id = test_obj,
-        .mem = try createObjMem(Union, value, 0),
-    });
-    std.testing.allocator.free(old_mem.?.view);
-
+    try putObj(&index, test_obj, Union, value, 0);
     view = index.get(Scheme("Obj"), test_obj).?;
     try std.testing.expectEqualDeep(@tagName(value), @tagName(view.v1));
     try std.testing.expectEqualDeep(@bitCast(u64, value.Ref), view.v1.Ref.id);
@@ -1357,6 +1374,56 @@ test "enum view" {
 
     const view = index.get(Scheme("Obj"), test_obj).?;
     try std.testing.expectEqualDeep(@as([]const u8, @tagName(Enum.two)), @tagName(view.v1));
+}
+
+test "multiple versions" {
+    const Scheme = define.Scheme("Objs", .{
+        define.Object("Obj", .{ u8, u16 }),
+    });
+
+    var index = try testIndex(Scheme, u8, 10);
+    defer deinitTestIndex(&index, null);
+
+    var view = index.get(Scheme("Obj"), test_obj).?;
+    try std.testing.expectEqual(@as(u8, 10), view.v1);
+
+    try putObj(&index, test_obj, u16, 20, 1);
+    view = index.get(Scheme("Obj"), test_obj).?;
+    try std.testing.expectEqual(@as(u16, 20), view.v2);
+
+    try putObj(&index, test_obj, u32, 30, 2);
+    view = index.get(Scheme("Obj"), test_obj).?;
+    try std.testing.expect(view == .unknown);
+}
+
+test "iterator" {
+    const Scheme = testScheme(u8);
+
+    var index = try testIndex(Scheme, u8, 0);
+    defer deinitTestIndex(&index, null);
+
+    var id = super.ObjectId{
+        .scheme = 0,
+        .source = 0,
+        .name = 1,
+    };
+    try putObj(&index, id, u8, 1, 0);
+    defer deinitObjectMem(&index, .{ .scheme = 0, .source = 0, .name = 1 });
+
+    id.name = 2;
+    try putObj(&index, id, u8, 2, 0);
+    defer deinitObjectMem(&index, .{ .scheme = 0, .source = 0, .name = 2 });
+
+    id.name = 3;
+    try putObj(&index, id, u8, 3, 0);
+    defer deinitObjectMem(&index, .{ .scheme = 0, .source = 0, .name = 3 });
+
+    var iter = index.iterator(Scheme("Obj"));
+    var len: usize = 0;
+    while (iter.next()) |entry| : (len += 1) {
+        try std.testing.expectEqual(entry.id, .{ .scheme = 0, .source = 0, .name = entry.view.v1 });
+    }
+    try std.testing.expectEqual(@as(usize, 4), len);
 }
 
 fn testScheme(comptime Type: type) define.SchemeFn {
@@ -1397,6 +1464,17 @@ fn deinitTestIndex(index: anytype, extra_objs: ?[]const super.ObjectId) void {
     }
     deinitObjectMem(index, test_obj);
     index.deinit();
+}
+
+fn putObj(index: anytype, id: super.ObjectId, comptime Type: type, value: anytype, version: u16) !void {
+    const old = try index.putMem(.{
+        .type = test_type,
+        .id = id,
+        .mem = try createObjMem(Type, value, version),
+    });
+    if (old) |mem| {
+        std.testing.allocator.free(mem.view);
+    }
 }
 
 fn createObjMem(comptime Type: type, value: anytype, version: u16) !SharedMem {
