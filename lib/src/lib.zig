@@ -8,5 +8,6 @@ pub const FunctionScheme = definition.FunctionScheme;
 test {
     _ = @import("channel.zig");
     _ = @import("definition.zig");
+    _ = @import("object.zig");
     _ = @import("serde.zig");
 }

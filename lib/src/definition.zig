@@ -320,6 +320,13 @@ pub const ObjectScheme = struct {
                         return result;
                     }
                 },
+                .Union => |info| {
+                    var result: []const type = &[_]type{};
+                    for (info.fields) |field| {
+                        result = ObjectScheme.mergeTypes(result, ObjectScheme.types(field.type));
+                    }
+                    return result;
+                },
                 .Fn => |info| {
                     var result: []const type = &[_]type{};
                     for (info.params) |param| {

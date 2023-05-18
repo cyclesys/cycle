@@ -207,8 +207,8 @@ pub fn deserialize(comptime Type: type, state: *DeserializeState) Error!Type {
         },
         .Int, .Float => {
             var bytes = try state.read(@sizeOf(Type));
-            var value_ptr = @ptrCast(*Type, @alignCast(@alignOf(Type), &bytes));
-            return value_ptr.*;
+            const ptr = @ptrCast(*align(1) const Type, &bytes);
+            return ptr.*;
         },
         .Pointer => |info| {
             switch (info.size) {
