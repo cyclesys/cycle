@@ -38,7 +38,7 @@ pub fn ObjectIndex(comptime scheme_fns: anytype) type {
             for (schemes, 0..) |scheme, i| {
                 var object_slot_types: [scheme.objects.len]type = undefined;
                 for (0..scheme.objects.len) |ii| {
-                    object_slot_types[ii] = std.AutoHashMap(u64, SharedMem);
+                    object_slot_types[ii] = MemMap;
                 }
                 scheme_slot_types[i] = Tuple(object_slot_types);
             }
@@ -92,15 +92,16 @@ pub fn ObjectIndex(comptime scheme_fns: anytype) type {
             }
         }
 
+        const MemMap = std.AutoHashMap(u64, SharedMem);
         const Self = @This();
 
         pub fn init(allocator: std.mem.Allocator) Self {
             var slots: Slots = undefined;
             inline for (schemes, 0..) |scheme, i| {
-                const SchemeSlot = std.meta.fields(Slots)[i].type;
+                const SchemeSlot = @typeInfo(Slots).Struct.fields[i].type;
                 var slot: SchemeSlot = undefined;
                 inline for (0..scheme.objects.len) |ii| {
-                    slot[ii] = std.AutoHashMap(u64, SharedMem).init(allocator);
+                    slot[ii] = MemMap.init(allocator);
                 }
                 slots[i] = slot;
             }
@@ -120,35 +121,47 @@ pub fn ObjectIndex(comptime scheme_fns: anytype) type {
 
         pub fn put(self: *Self, obj: super.Object) Error!void {
             var old_mem = try self.putMem(obj);
-            if (old_mem) |*mem| {
+            if (old_mem) |mem| {
                 mem.deinit();
             }
         }
 
         fn putMem(self: *Self, obj: super.Object) Error!?SharedMem {
-            if (obj.type.scheme >= schemes.len) {
+            const map = try self.getMap(obj.type);
+            const old = try map.fetchPut(@bitCast(u64, obj.id), obj.mem);
+            if (old) |kv| {
+                return kv.value;
+            }
+            return null;
+        }
+
+        pub fn remove(self: *Self, type_id: super.TypeId, obj_id: super.ObjectId) Error!void {
+            const map = try self.getMap(type_id);
+            const removed = map.fetchRemove(@bitCast(u64, obj_id));
+            if (removed) |kv| {
+                kv.value.deinit();
+            }
+        }
+
+        fn getMap(self: *Self, id: super.TypeId) Error!*MemMap {
+            if (id.scheme >= schemes.len) {
                 return error.SchemeNotDefined;
             }
 
             const SchemeEnum = IndexEnum(schemes.len);
-            switch (@intToEnum(SchemeEnum, obj.type.scheme)) {
+            switch (@intToEnum(SchemeEnum, id.scheme)) {
                 inline else => |scheme_val| {
                     const scheme_slot = @enumToInt(scheme_val);
-                    if (obj.type.name >= schemes[scheme_slot].objects.len) {
+                    const scheme = schemes[scheme_slot];
+                    if (id.name >= scheme.objects.len) {
                         return error.ObjectNotDefined;
                     }
 
-                    const TypeEnum = IndexEnum(schemes[scheme_slot].objects.len);
-                    switch (@intToEnum(TypeEnum, obj.type.name)) {
+                    const TypeEnum = IndexEnum(scheme.objects.len);
+                    switch (@intToEnum(TypeEnum, id.name)) {
                         inline else => |type_val| {
                             const type_slot = @enumToInt(type_val);
-
-                            const map = &self.slots[scheme_slot][type_slot];
-                            const old = try map.fetchPut(@bitCast(u64, obj.id), obj.mem);
-                            if (old) |kv| {
-                                return kv.value;
-                            }
-                            return null;
+                            return &self.slots[scheme_slot][type_slot];
                         },
                     }
                 },
@@ -252,7 +265,7 @@ fn IndexEnum(comptime num_fields: comptime_int) type {
 fn ObjectIterator(comptime Index: type, comptime scheme: []const u8, comptime name: []const u8) type {
     return struct {
         index: *Index,
-        iter: std.AutoHashMap(u64, SharedMem).Iterator,
+        iter: Index.MemMap.Iterator,
 
         const Self = @This();
 
@@ -1446,13 +1459,11 @@ const test_obj = super.ObjectId{
 fn testIndex(comptime Scheme: define.SchemeFn, comptime Type: type, value: anytype) !ObjectIndex(.{Scheme}) {
     const Index = ObjectIndex(.{Scheme});
     var index = Index.init(std.testing.allocator);
-
-    try index.put(.{
+    _ = try index.putMem(.{
         .type = test_type,
         .id = test_obj,
         .mem = try createObjMem(Type, value, 0),
     });
-
     return index;
 }
 

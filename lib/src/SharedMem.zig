@@ -4,7 +4,7 @@ const windows = struct {
     usingnamespace mod.system.memory;
 };
 
-const SharedMem = @This();
+const Self = @This();
 
 pub const Error = error{
     CreateMemFailed,
@@ -14,7 +14,7 @@ pub const Error = error{
 handle: windows.HANDLE,
 view: []u8,
 
-pub fn init(size: usize) Error!SharedMem {
+pub fn init(size: usize) Error!Self {
     const handle = windows.CreateFileMappingW(
         windows.INVALID_HANDLE_VALUE,
         null,
@@ -29,15 +29,15 @@ pub fn init(size: usize) Error!SharedMem {
 
     const view = try mapView(handle.?, size);
 
-    return SharedMem{
+    return Self{
         .handle = handle.?,
         .view = view,
     };
 }
 
-pub fn import(handle: windows.HANDLE, size: usize) Error!SharedMem {
+pub fn import(handle: windows.HANDLE, size: usize) Error!Self {
     const view = try mapView(handle, size);
-    return SharedMem{
+    return Self{
         .handle = handle,
         .view = view,
     };
@@ -56,7 +56,7 @@ fn mapView(handle: windows.HANDLE, size: usize) Error![]u8 {
     return view;
 }
 
-pub fn deinit(self: *SharedMem) void {
+pub fn deinit(self: *Self) void {
     _ = windows.UnmapViewOfFile(self.view.ptr);
     self.view.ptr = undefined;
     self.view.len = 0;

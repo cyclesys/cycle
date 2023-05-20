@@ -1,14 +1,15 @@
 const std = @import("std");
-const define = @import("define.zig");
-const definition = @import("definition.zig");
 const SharedMem = @import("SharedMem.zig");
 
-pub const TypeId = packed struct {
+pub const channel = @import("object/channel.zig");
+pub const index = @import("object/index.zig");
+
+pub const TypeId = struct {
     scheme: u16,
     name: u32,
 };
 
-pub const ObjectId = packed struct {
+pub const ObjectId = packed struct(u64) {
     scheme: u16,
     source: u16,
     name: u32,
