@@ -495,7 +495,7 @@ fn MapView(
     comptime info: definition.FieldType.Map,
 ) type {
     return struct {
-        index: if (fieldTypeNeedsIndex(info.key.*) or fieldTypeNeedsIndex(info.value.*)) *Index else void,
+        index: if (key_needs_index or value_needs_index) *Index else void,
         len: usize,
         ends: []align(1) const usize,
         bytes: []const u8,
@@ -507,6 +507,9 @@ fn MapView(
             key: KeyView,
             value: ValueView,
         };
+
+        const key_needs_index = fieldTypeNeedsIndex(info.key.*);
+        const value_needs_index = fieldTypeNeedsIndex(info.value.*);
 
         pub fn read(self: *const Self, idx: usize) KeyValue {
             if (idx >= self.len) {
@@ -541,14 +544,14 @@ fn MapView(
             const key = readFieldType(
                 KeyView,
                 info.key.*,
-                if (comptime fieldTypeNeedsIndex(info.key.*)) self.index else undefined,
+                if (key_needs_index) self.index else undefined,
                 self.bytes[key_start..key_end],
             ).value;
 
             const value = readFieldType(
                 ValueView,
                 info.value.*,
-                if (comptime fieldTypeNeedsIndex(info.value.*)) self.index else undefined,
+                if (value_needs_index) self.index else undefined,
                 self.bytes[key_end..value_end],
             ).value;
 
@@ -917,9 +920,11 @@ fn readMap(
         }
     }
 
+    const key_needs_index = comptime fieldTypeNeedsIndex(info.key.*);
+    const value_needs_index = comptime fieldTypeNeedsIndex(info.value.*);
     return .{
         .value = View{
-            .index = index,
+            .index = if (key_needs_index or value_needs_index) index else undefined,
             .len = len,
             .ends = ends,
             .bytes = read_bytes[start..end],
@@ -1059,11 +1064,26 @@ fn fieldTypeSize(comptime info: definition.FieldType) ?usize {
                 child_size * array_info.len
             else
                 null,
-            .List, .Map, .String => null,
             .Struct => |fields| fieldsSize(fields),
             .Tuple => |fields| fieldsSize(fields),
-            .Union => |fields| fieldsSize(fields),
+            .Union => |fields| blk: {
+                var prev_field_size: ?usize = null;
+                for (fields) |field| {
+                    if (fieldTypeSize(field.type)) |field_size| {
+                        if (prev_field_size) |prev_size| {
+                            if (field_size != prev_size) {
+                                break :blk null;
+                            }
+                        }
+                        prev_field_size = field_size;
+                        continue;
+                    }
+
+                    break :blk null;
+                }
+            },
             .Enum => @sizeOf(usize),
+            .List, .Map, .String => null,
         };
     }
 }
