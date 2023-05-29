@@ -10,11 +10,6 @@ const windows = struct {
 const serde = @import("serde.zig");
 const SharedMem = @import("SharedMem.zig");
 
-pub const Error = error{
-    CreateChannelFailed,
-    ChannelInvalid,
-} || serde.Error || SharedMem.Error;
-
 const ByteList = std.ArrayList(u8);
 
 pub fn Reader(comptime Message: type) type {
@@ -35,53 +30,23 @@ pub fn Reader(comptime Message: type) type {
             self.buf.deinit();
         }
 
-        pub fn read(self: *Self, allocator: std.mem.Allocator) Error!Message {
-            return self.readImpl(null, allocator);
+        pub fn read(self: *Self) !Message {
+            const msg = try self.readImpl(null);
+            return msg.?;
         }
 
-        pub fn readFor(self: *Self, timeout: u32, allocator: std.mem.Allocator) Error!?Message {
-            return self.readImpl(timeout, allocator);
+        pub fn readFor(self: *Self, timeout: u32) !?Message {
+            return self.readImpl(timeout);
         }
 
         fn readImpl(
             self: *Self,
             timeout: anytype,
-            allocator: std.mem.Allocator,
-        ) Error!if (timeout == null) Message else ?Message {
-            self.buf.clearRetainingCapacity();
-            while (true) {
-                const first_wait = self.chan.first_wait;
-                const result = try self.chan.wait(timeout);
-                if (timeout != null and !result) {
-                    return null;
-                }
-
-                const remaining = try serde.deserialize(usize, @constCast(&.{
-                    // it shouldn't allocate any memory to deserialize a `usize`
-                    .allocator = undefined,
-                    .buf = self.chan.mem.view,
-                }));
-
-                if (first_wait) {
-                    try self.buf.ensureTotalCapacity(Cursor.msg_size + remaining);
-                }
-
-                try self.buf.appendSlice(self.chan.mem.view[Cursor.msg_start..]);
-                try self.chan.signal();
-
-                if (remaining == 0) {
-                    break;
-                }
+        ) !?Message {
+            if (!try self.chan.read(&self.buf, timeout)) {
+                return null;
             }
-
-            self.chan.reset();
-
-            const msg = try serde.deserialize(Message, @constCast(&.{
-                .allocator = allocator,
-                .buf = self.buf.items,
-            }));
-
-            return msg;
+            return try serde.deserialize(Message, self.buf.items);
         }
     };
 }
@@ -104,76 +69,25 @@ pub fn Writer(comptime Message: type) type {
             self.buf.deinit();
         }
 
-        pub fn write(self: *Self, msg: Message) Error!void {
-            try self.writeImpl(null, msg);
+        pub fn write(self: *Self, msg: Message) !void {
+            _ = try self.writeImpl(msg, null);
         }
 
-        pub fn writeFor(self: *Self, timeout: u32, msg: Message) Error!bool {
-            return self.writeImpl(timeout, msg);
+        pub fn writeFor(self: *Self, msg: Message, timeout: u32) !bool {
+            return self.writeImpl(msg, timeout);
         }
 
         fn writeImpl(
             self: *Self,
-            timeout: anytype,
             msg: Message,
-        ) Error!if (timeout == null) void else bool {
+            timeout: anytype,
+        ) !bool {
             self.buf.clearRetainingCapacity();
-            try serde.serialize(Message, msg, @constCast(&.{
-                .list = &self.buf,
-            }));
-
-            var remaining = self.buf.items.len;
-            var cursor = Cursor{
-                .dest = self.chan.mem.view,
-                .source = self.buf.items,
-            };
-
-            while (remaining > Cursor.msg_size) {
-                remaining -= Cursor.msg_size;
-
-                const can_write = try self.chan.wait(timeout);
-                if (timeout != null and !can_write) {
-                    return false;
-                }
-
-                try cursor.write(remaining, Cursor.msg_size);
-                try self.chan.signal();
-            }
-
-            if (remaining > 0) {
-                const can_write = try self.chan.wait(timeout);
-                if (timeout != null and !can_write) {
-                    return false;
-                }
-
-                try cursor.write(0, remaining);
-                try self.chan.signal();
-            }
-
-            self.chan.reset();
+            try serde.serialize(msg, self.buf.writer());
+            return self.chan.write(self.buf.items, timeout);
         }
     };
 }
-
-const Cursor = struct {
-    dest: []u8,
-    source: []const u8,
-    pos: usize = 0,
-
-    const msg_start = @sizeOf(usize);
-    const msg_size = Channel.size - msg_start;
-
-    fn write(self: *Cursor, remaining: usize, len: usize) !void {
-        try serde.serialize(usize, remaining, @constCast(&.{
-            .fixed = .{ .buf = self.dest },
-        }));
-
-        const msg_bytes = self.source[self.pos..(self.pos + len)];
-        self.pos += len;
-
-        std.mem.copy(u8, self.dest[msg_start..], msg_bytes);
-    }
-};
 
 pub const Channel = struct {
     wait_ev: windows.HANDLE,
@@ -182,8 +96,10 @@ pub const Channel = struct {
     first_wait: bool = true,
 
     const size = 1 * 1024;
+    const msg_start = @sizeOf(usize);
+    const msg_size = size - msg_start;
 
-    pub fn init(start_owned: bool) Error!Channel {
+    pub fn init(start_owned: bool) !Channel {
         const wait_ev = windows.CreateEventW(
             null,
             1,
@@ -214,7 +130,7 @@ pub const Channel = struct {
         wait_ev: windows.HANDLE,
         signal_ev: windows.HANDLE,
         file: windows.HANDLE,
-    ) Error!Channel {
+    ) !Channel {
         const mem = try SharedMem.import(file, size);
         return Channel{
             .wait_ev = wait_ev,
@@ -238,7 +154,82 @@ pub const Channel = struct {
         };
     }
 
-    fn wait(self: *Channel, timeout: ?u32) Error!bool {
+    fn read(self: *Channel, out: *ByteList, timeout: ?u32) !bool {
+        self.first_wait = true;
+        out.clearRetainingCapacity();
+
+        while (true) {
+            const first_wait = self.first_wait;
+            if (!try self.wait(timeout)) {
+                return false;
+            }
+
+            const remaining = try serde.deserialize(usize, self.mem.view);
+
+            if (first_wait) {
+                try out.ensureTotalCapacity(msg_size + remaining);
+            }
+
+            try out.appendSlice(self.mem.view[msg_start..]);
+            try self.signal();
+
+            if (remaining == 0) {
+                break;
+            }
+        }
+
+        return true;
+    }
+
+    fn write(self: *Channel, bytes: []const u8, timeout: ?u32) !bool {
+        self.first_wait = true;
+
+        var remaining = bytes.len;
+        var stream = std.io.fixedBufferStream(self.mem.view);
+        var writer = stream.writer();
+
+        var pos: usize = 0;
+        while (remaining > msg_size) {
+            remaining -= msg_size;
+
+            if (!try self.wait(timeout)) {
+                return false;
+            }
+
+            try serde.serialize(remaining, writer);
+
+            // This does not use `serde.serialize` because `serde.serialize` would serialize the length
+            // of the slice as well as the bytes, which we don't want.
+            //
+            // Instead we use `@memcpy` to copy the bytes directly into the view.
+            @memcpy(self.mem.view[msg_start..], bytes[pos..(pos + msg_size)]);
+
+            pos += msg_size;
+            stream.reset();
+
+            try self.signal();
+        }
+
+        if (remaining > 0) {
+            if (!try self.wait(timeout)) {
+                return false;
+            }
+
+            try serde.serialize(@as(usize, 0), writer);
+
+            // This does not use `serde.serialize` because `serde.serialize` would serialize the length
+            // of the slice as well as the bytes, which we don't want.
+            //
+            // Instead we use `@memcpy` to copy the bytes directly into the view.
+            @memcpy(self.mem.view[msg_start..(msg_start + remaining)], bytes[pos..(pos + remaining)]);
+
+            try self.signal();
+        }
+
+        return true;
+    }
+
+    fn wait(self: *Channel, timeout: ?u32) !bool {
         const wait_for = if (timeout != null and self.first_wait) timeout.? else windows.INFINITE;
         self.first_wait = false;
 
@@ -252,26 +243,18 @@ pub const Channel = struct {
         };
     }
 
-    fn signal(self: *Channel) Error!void {
+    fn signal(self: *Channel) !void {
         if (windows.ResetEvent(self.wait_ev) == 0 or
             windows.SetEvent(self.signal_ev) == 0)
         {
             return error.ChannelInvalid;
         }
     }
-
-    fn reset(self: *Channel) void {
-        self.first_wait = true;
-    }
 };
 
 const testing = std.testing;
 const StrMessage = struct {
     str: ?[]const u8,
-
-    fn deinit(self: StrMessage) void {
-        serde.destroy(StrMessage, self, testing.allocator);
-    }
 };
 const MessageReader = Reader(StrMessage);
 const MessageWriter = Writer(StrMessage);
@@ -281,8 +264,7 @@ const Child = struct {
 
     fn run(self: *Child) !void {
         while (true) {
-            const msg = try self.reader.read(testing.allocator);
-            defer msg.deinit();
+            const msg = try self.reader.read();
 
             if (msg.str == null) {
                 break;
@@ -314,8 +296,7 @@ test "channel io without timeout" {
         };
         try writer.write(StrMessage{ .str = str });
         if (str != null) {
-            const msg = try reader.read(testing.allocator);
-            defer msg.deinit();
+            const msg = try reader.read();
             try testing.expectEqualDeep(str, msg.str);
         }
     }
