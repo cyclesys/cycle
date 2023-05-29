@@ -23,4 +23,5 @@ pub const Object = struct {
 
 test {
     _ = @import("object/index.zig");
+    _ = @import("object/write.zig");
 }

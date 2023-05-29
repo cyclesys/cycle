@@ -5,6 +5,8 @@ const serde = @import("../serde.zig");
 const super = @import("../object.zig");
 const SharedMem = @import("../SharedMem.zig");
 
+const meta = @import("meta.zig");
+
 pub const Error = error{
     SchemeNotDefined,
     ObjectNotDefined,
@@ -114,7 +116,13 @@ pub fn ObjectIndex(comptime scheme_fns: anytype) type {
         pub fn deinit(self: *Self) void {
             inline for (schemes, 0..) |scheme, i| {
                 inline for (0..scheme.objects.len) |ii| {
-                    self.slots[i][ii].deinit();
+                    var map = &self.slots[i][ii];
+                    defer map.deinit();
+
+                    var values = map.valueIterator();
+                    while (values.next()) |mem| {
+                        mem.deinit();
+                    }
                 }
             }
         }
@@ -223,7 +231,7 @@ fn Tuple(comptime types: anytype) type {
         var fields: [types.len]std.builtin.Type.StructField = undefined;
         for (types, 0..) |T, i| {
             fields[i] = .{
-                .name = numFieldName(i),
+                .name = meta.numFieldName(i),
                 .type = T,
                 .default_value = null,
                 .is_comptime = false,
@@ -247,7 +255,7 @@ fn IndexEnum(comptime num_fields: comptime_int) type {
         var fields: [num_fields]std.builtin.Type.EnumField = undefined;
         for (0..num_fields) |i| {
             fields[i] = .{
-                .name = numFieldName(i),
+                .name = meta.numFieldName(i),
                 .value = i,
             };
         }
@@ -300,10 +308,9 @@ fn ObjectView(
 
     var union_fields: [info.versions.len + 1]std.builtin.Type.UnionField = undefined;
     for (info.versions, 0..) |ver_info, i| {
-        const tag_name = verFieldName(i + 1);
         const VersionField = FieldTypeView(Index, scheme, ver_info);
         union_fields[i] = .{
-            .name = tag_name,
+            .name = meta.verFieldName(i),
             .type = VersionField,
             .alignment = @alignOf(VersionField),
         };
@@ -329,7 +336,7 @@ fn VersionEnum(comptime num_versions: comptime_int) type {
         var fields: [num_versions + 1]std.builtin.Type.EnumField = undefined;
         for (0..num_versions) |i| {
             fields[i] = .{
-                .name = verFieldName(i + 1),
+                .name = meta.verFieldName(i),
                 .value = i,
             };
         }
@@ -345,21 +352,6 @@ fn VersionEnum(comptime num_versions: comptime_int) type {
                 .is_exhaustive = true,
             },
         });
-    }
-}
-
-fn verFieldName(comptime num: comptime_int) []const u8 {
-    comptime {
-        return "v" ++ numFieldName(num);
-    }
-}
-
-fn numFieldName(comptime num: comptime_int) []const u8 {
-    comptime {
-        var field_name_size = std.fmt.count("{d}", .{num});
-        var field_name: [field_name_size]u8 = undefined;
-        _ = std.fmt.formatIntBuf(&field_name, num, 10, .lower, .{});
-        return &field_name;
     }
 }
 
