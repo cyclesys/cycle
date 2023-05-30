@@ -1,6 +1,50 @@
 const std = @import("std");
 const definition = @import("../definition.zig");
 
+pub fn NumEnum(comptime num: comptime_int) type {
+    comptime {
+        var fields: [num]std.builtin.Type.EnumField = undefined;
+        for (0..num) |i| {
+            fields[i] = .{
+                .name = numFieldName(i),
+                .value = i,
+            };
+        }
+        return @Type(.{
+            .Enum = .{
+                .tag_type = std.math.IntFittingRange(0, num - 1),
+                .fields = &fields,
+                .decls = &[_]std.builtin.Type.Declaration{},
+                .is_exhaustive = true,
+            },
+        });
+    }
+}
+
+pub fn Tuple(comptime types: anytype) type {
+    comptime {
+        var fields: [types.len]std.builtin.Type.StructField = undefined;
+        for (types, 0..) |T, i| {
+            fields[i] = .{
+                .name = numFieldName(i),
+                .type = T,
+                .default_value = null,
+                .is_comptime = false,
+                .alignment = @alignOf(T),
+            };
+        }
+        return @Type(.{
+            .Struct = .{
+                .layout = .Auto,
+                .backing_integer = null,
+                .fields = &fields,
+                .decls = &[_]std.builtin.Type.Declaration{},
+                .is_tuple = true,
+            },
+        });
+    }
+}
+
 pub fn FieldTypeEnum(comptime fields: []const definition.FieldType.EnumField) type {
     var enum_fields: [fields.len]std.builtin.Type.EnumField = undefined;
     for (fields, 0..) |field, i| {
