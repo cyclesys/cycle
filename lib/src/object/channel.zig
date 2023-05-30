@@ -5,16 +5,23 @@ const windows = struct {
 };
 const channel = @import("../channel.zig");
 const serde = @import("../serde.zig");
-const super = @import("../object.zig");
 const SharedMem = @import("../SharedMem.zig");
+
+const super = @import("../object.zig");
+const write = @import("write.zig");
+
+pub const Sync = enum {
+    read,
+    write,
+};
 
 pub fn ObjectChannel(comptime Index: type) type {
     return struct {
         allocator: std.mem.Allocator,
         reader: ObjectChannelReader,
-        writer: ObjectChannelReader,
+        writer: ObjectChannelWriter,
         index: Index,
-        synced: bool,
+        state: ?Sync,
 
         const Self = @This();
 
@@ -29,14 +36,14 @@ pub fn ObjectChannel(comptime Index: type) type {
                 .reader = reader,
                 .writer = writer,
                 .index = index,
-                .synced = false,
+                .state = null,
             };
         }
 
-        pub fn sync(self: *Self) !void {
+        pub fn sync(self: *Self, state: Sync) !void {
             try self.unsync();
-            try self.writer.write(.Sync);
-            var msg = try self.reader.read(self.allocator);
+            try self.writer.write(.{ .Sync = state });
+            var msg = try self.reader.read();
             while (msg != .Synced) {
                 switch (msg) {
                     .IndexObject => |info| {
@@ -47,18 +54,60 @@ pub fn ObjectChannel(comptime Index: type) type {
                     },
                     else => unreachable,
                 }
-                msg.deinit();
-                msg = try self.reader.read(self.allocator);
+                msg = try self.reader.read();
             }
-            msg.deinit();
-            self.synced = true;
+            self.state = state;
         }
 
-        pub fn unsync(self: *Self) channel.Error!void {
-            if (self.synced) {
+        pub fn unsync(self: *Self) !void {
+            if (self.state != null) {
                 try self.writer.write(.Unsync);
-                self.synced = false;
+                self.state = null;
             }
+        }
+
+        pub fn set(
+            self: *Self,
+            comptime Obj: type,
+            id: super.ObjectId,
+            value: write.ObjectValue(Obj),
+        ) !void {
+            if (self.state == null or self.state.? != .write) {
+                return error.InvalidSyncState;
+            }
+
+            var bytes = std.ArrayList(u8).init(self.allocator);
+            defer bytes.deinit();
+
+            try write.writeValue(Obj, value, bytes.writer());
+            try self.writer.write(.{
+                .Set = .{
+                    .id = id,
+                    .bytes = bytes.items,
+                },
+            });
+        }
+
+        pub fn mut(
+            self: *Self,
+            comptime Obj: type,
+            id: super.ObjectId,
+            value: write.ObjectMut(Obj),
+        ) !void {
+            if (self.state == null or self.state.? != .write) {
+                return error.InvalidSyncState;
+            }
+
+            var bytes = std.ArrayList(u8).init(self.allocator);
+            defer bytes.deinit();
+
+            try write.writeMut(Obj, value, bytes.writer());
+            try self.writer.write(.{
+                .Mut = .{
+                    .id = id,
+                    .bytes = bytes.items,
+                },
+            });
         }
     };
 }
@@ -99,13 +148,17 @@ pub const SystemMessage = struct {
             return SharedMem.import(handle, self.size);
         }
     };
-
-    pub fn deinit(self: *const SystemMessage, allocator: std.mem.Allocator) void {
-        serde.detroy(SystemMessage, self.*, allocator);
-    }
 };
 
 pub const PluginMessage = union(enum) {
-    Sync: void,
+    Sync: Sync,
     Unsync: void,
+    Set: struct {
+        id: super.ObjectId,
+        bytes: []const u8,
+    },
+    Mut: struct {
+        id: super.ObjectId,
+        bytes: []const u8,
+    },
 };
