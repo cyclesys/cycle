@@ -3,6 +3,8 @@ const SharedMem = @import("SharedMem.zig");
 
 pub const channel = @import("object/channel.zig");
 pub const index = @import("object/index.zig");
+pub const read = @import("object/read.zig");
+pub const write = @import("object/write.zig");
 
 pub const TypeId = struct {
     scheme: u16,

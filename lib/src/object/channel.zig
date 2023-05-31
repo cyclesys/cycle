@@ -18,17 +18,19 @@ pub const Sync = enum {
 pub fn ObjectChannel(comptime Index: type) type {
     return struct {
         allocator: std.mem.Allocator,
-        reader: ObjectChannelReader,
-        writer: ObjectChannelWriter,
+        reader: Reader,
+        writer: Writer,
         index: Index,
         state: ?Sync,
 
+        const Reader = channel.Reader(SystemMessage);
+        const Writer = channel.Writer(PluginMessage);
         const Self = @This();
 
         pub fn init(
             allocator: std.mem.Allocator,
-            reader: ObjectChannelReader,
-            writer: ObjectChannelWriter,
+            reader: Reader,
+            writer: Writer,
             index: Index,
         ) Self {
             return Self{
@@ -46,10 +48,10 @@ pub fn ObjectChannel(comptime Index: type) type {
             var msg = try self.reader.read();
             while (msg != .Synced) {
                 switch (msg) {
-                    .IndexObject => |info| {
+                    .Index => |info| {
                         try self.index.put(try info.into());
                     },
-                    .ForgetObject => |info| {
+                    .Remove => |info| {
                         try self.index.remove(info.type, info.id);
                     },
                     else => unreachable,
@@ -112,20 +114,17 @@ pub fn ObjectChannel(comptime Index: type) type {
     };
 }
 
-pub const ObjectChannelReader = channel.Reader(SystemMessage);
-pub const ObjectChannelWriter = channel.Writer(PluginMessage);
-
 pub const SystemMessage = struct {
-    IndexObject: IndexObjectInfo,
-    ForgetObject: ForgetObjectInfo,
+    Index: IndexInfo,
+    Remove: RemoveInfo,
     Synced: void,
 
-    pub const IndexObjectInfo = struct {
+    const IndexInfo = struct {
         id: super.ObjectId,
         type: super.ObjectType,
         mem: SharedMemInfo,
 
-        pub fn into(self: *const IndexObjectInfo) SharedMem.Error!super.Object {
+        fn into(self: *const IndexInfo) SharedMem.Error!super.Object {
             return super.Object{
                 .id = self.id,
                 .type = self.type,
@@ -134,16 +133,16 @@ pub const SystemMessage = struct {
         }
     };
 
-    pub const ForgetObjectInfo = struct {
+    const RemoveInfo = struct {
         type: super.TypeId,
         id: super.ObjectId,
     };
 
-    pub const SharedMemInfo = struct {
+    const SharedMemInfo = struct {
         handle: usize,
         size: usize,
 
-        pub fn into(self: *const SharedMemInfo) SharedMem.Error!SharedMem {
+        fn into(self: *const SharedMemInfo) SharedMem.Error!SharedMem {
             const handle = @intToPtr(windows.HANDLE, self.handle);
             return SharedMem.import(handle, self.size);
         }

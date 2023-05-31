@@ -48,7 +48,7 @@ pub fn ObjectValue(comptime Obj: type) type {
     }
 }
 
-pub fn FieldTypeValue(comptime info: definition.FieldType) type {
+fn FieldTypeValue(comptime info: definition.FieldType) type {
     return switch (info) {
         .Void => void,
         .Bool => bool,
