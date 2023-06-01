@@ -129,19 +129,12 @@ pub fn ObjectIndex(comptime scheme_fns: anytype) type {
         }
 
         pub fn put(self: *Self, obj: super.Object) Error!void {
-            var old_mem = try self.putMem(obj);
-            if (old_mem) |*mem| {
+            const map = try self.getMap(obj.type);
+            var old = try map.fetchPut(@bitCast(u64, obj.id), obj.mem);
+            if (old) |*kv| {
+                const mem = &kv.value;
                 mem.deinit();
             }
-        }
-
-        fn putMem(self: *Self, obj: super.Object) Error!?SharedMem {
-            const map = try self.getMap(obj.type);
-            const old = try map.fetchPut(@bitCast(u64, obj.id), obj.mem);
-            if (old) |kv| {
-                return kv.value;
-            }
-            return null;
         }
 
         pub fn remove(self: *Self, type_id: super.TypeId, obj_id: super.ObjectId) Error!void {
@@ -166,11 +159,11 @@ pub fn ObjectIndex(comptime scheme_fns: anytype) type {
                         return error.ObjectNotDefined;
                     }
 
-                    const TypeEnum = meta.NumEnum(scheme.objects.len);
-                    switch (@intToEnum(TypeEnum, id.name)) {
-                        inline else => |type_val| {
-                            const type_slot = @enumToInt(type_val);
-                            return &self.slots[scheme_slot][type_slot];
+                    const ObjectEnum = meta.NumEnum(scheme.objects.len);
+                    switch (@intToEnum(ObjectEnum, id.name)) {
+                        inline else => |object_val| {
+                            const object_slot = @enumToInt(object_val);
+                            return &self.slots[scheme_slot][object_slot];
                         },
                     }
                 },
@@ -191,6 +184,92 @@ pub fn ObjectIndex(comptime scheme_fns: anytype) type {
                 );
             }
             return null;
+        }
+
+        pub fn getResolve(
+            self: *Self,
+            type_id: super.TypeId,
+            obj_id: super.ObjectId,
+            context: anytype,
+            f: anytype,
+        ) !switch (@typeInfo(@TypeOf(f))) {
+            .Fn => |info| blk: {
+                if (info.params.len != 3 or
+                    info.params[0].type == null or info.params[0].type.? != type or
+                    info.params[1].type != null or
+                    info.params[2].type == null or info.params[2].type.? != @TypeOf(context))
+                {
+                    @compileError("`f` must be a fn of type `fn (comptime Obj: type, view: anytype, ctx: @TypeOf(context)) 'some return type'");
+                }
+
+                break :blk switch (@typeInfo(info.return_type.?)) {
+                    .ErrorUnion => |return_type| return_type.payload,
+                    else => info.return_type.?,
+                };
+            },
+            else => @compileError("`f` must be a fn of type `fn (comptime Obj: type, view: anytype, ctx: @TypeOf(context)) 'some return type'"),
+        } {
+            if (type_id.scheme >= schemes.len) {
+                return error.SchemeNotDefined;
+            }
+
+            const SchemeEnum = meta.NumEnum(schemes.len);
+            switch (@intToEnum(SchemeEnum, type_id.scheme)) {
+                inline else => |scheme_val| {
+                    const scheme_slot = @enumToInt(scheme_val);
+                    const scheme = schemes[scheme_slot];
+
+                    if (type_id.name >= scheme.objects.len) {
+                        return error.ObjectNotDefined;
+                    }
+
+                    const SchemeFn = for (scheme_fns) |Fn| {
+                        const Scheme = Fn(define.This);
+                        if (std.mem.eql(Scheme.name, scheme.name)) {
+                            break Fn;
+                        }
+                    } else {
+                        return error.SchemeNotDefinedAtTopLevel;
+                    };
+
+                    const ObjectEnum = meta.NumEnum(scheme.objects.len);
+                    switch (@intToEnum(ObjectEnum, type_id.name)) {
+                        inline else => |object_val| {
+                            const object_slot = @enumToInt(object_val);
+                            const object = scheme.objects[object_slot];
+
+                            const Scheme = SchemeFn(define.This);
+                            const Obj = for (Scheme.types) |Object| {
+                                if (std.mem.eql(Object.name, object.name)) {
+                                    break SchemeFn(Object.name);
+                                }
+                            } else {
+                                return error.ObjectNotDefinedAtTopLevel;
+                            };
+
+                            const map = &self.slots[scheme_slot][object_slot];
+                            const mem = map.getPtr(@bitCast(u64, obj_id));
+                            const view = if (mem) |m|
+                                read.readObject(
+                                    Self,
+                                    scheme.name,
+                                    object.name,
+                                    self,
+                                    m.view,
+                                )
+                            else
+                                null;
+
+                            const return_type = @typeInfo(@TypeOf(f)).Fn.return_type.?;
+                            if (@typeInfo(return_type) == .ErrorUnion) {
+                                return try f(Obj, view, context);
+                            } else {
+                                return f(Obj, view, context);
+                            }
+                        },
+                    }
+                },
+            }
         }
 
         pub fn getBytes(
@@ -226,7 +305,7 @@ pub fn ObjectIndex(comptime scheme_fns: anytype) type {
         }
 
         pub fn Entry(comptime Obj: type) type {
-            return ObjectIterator(Self, Obj.scheme.name, Obj.def.name).Entry;
+            return Iterator(Obj).Entry;
         }
     };
 }
@@ -262,7 +341,9 @@ fn ObjectIterator(comptime Index: type, comptime scheme: []const u8, comptime na
 
 test "iterator" {
     const Scheme = define.Scheme("test", .{
-        define.Object("Obj", .{u8}),
+        define.Object("Obj", .{
+            u8,
+        }),
     });
     const Obj = Scheme("Obj");
 
