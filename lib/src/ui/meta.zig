@@ -1,6 +1,7 @@
 const std = @import("std");
+pub usingnamespace @import("../meta.zig");
 
-pub fn opt(opts: anytype, comptime name: anytype) ?OptType(@TypeOf(opts), name) {
+pub fn opt(opts: anytype, comptime name: anytype) OptType(@TypeOf(opts), name) {
     const Opt = OptType(@TypeOf(opts), name);
     if (Opt == void) {
         return null;
@@ -11,16 +12,20 @@ pub fn opt(opts: anytype, comptime name: anytype) ?OptType(@TypeOf(opts), name) 
 
 fn OptType(comptime Opts: type, comptime name: anytype) type {
     if (@hasField(Opts, name)) {
-        return std.meta.FieldType(Opts, name);
+        const Type = std.meta.FieldType(Opts, name);
+        if (@typeInfo(Type) == .Optional) {
+            return Type;
+        }
+
+        return ?Type;
     }
-    return void;
+    return ?void;
 }
 
-pub fn FieldType(comptime T: type, comptime name: []const u8) type {
-    return std.meta.FieldType(T, @intToEnum(
-        std.meta.FieldEnum(T),
-        std.meta.fieldIndex(T, name),
-    ));
+pub fn initMerge(comptime Expected: type, actual: anytype) Merge(Expected, @TypeOf(actual)) {
+    const Actual = @TypeOf(actual);
+    var result: Merge(Expected, Actual) = undefined;
+    return result;
 }
 
 pub fn Merge(comptime Expected: type, comptime Actual: type) type {
@@ -80,8 +85,9 @@ pub fn Merge(comptime Expected: type, comptime Actual: type) type {
     });
 }
 
-pub fn initMerge(comptime Expected: type, actual: anytype) Merge(Expected, @TypeOf(actual)) {
-    const Actual = @TypeOf(actual);
-    var result: Merge(Expected, Actual) = undefined;
-    return result;
+pub fn FieldType(comptime T: type, comptime name: []const u8) type {
+    return std.meta.FieldType(T, @intToEnum(
+        std.meta.FieldEnum(T),
+        std.meta.fieldIndex(T, name),
+    ));
 }
