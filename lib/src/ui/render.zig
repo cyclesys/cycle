@@ -7,11 +7,11 @@ pub fn rect(config: anytype) Rect(@TypeOf(config)) {
 pub fn Rect(comptime Config: type) type {
     return tree.RenderNode(Config, .Rect, struct {
         radius: ?struct {
-            top_left: ?u16,
-            top_right: ?u16,
-            bottom_left: ?u16,
-            bottom_right: ?u16,
-        },
+            top_left: ?u16 = null,
+            top_right: ?u16 = null,
+            bottom_left: ?u16 = null,
+            bottom_right: ?u16 = null,
+        } = null,
     });
 }
 

@@ -59,6 +59,16 @@ pub const Size = struct {
 pub const Offset = struct {
     x: u16,
     y: u16,
+
+    pub const zero = Offset{
+        .x = 0,
+        .y = 0,
+    };
+
+    pub fn add(self: *Offset, other: Offset) void {
+        self.x += other.x;
+        self.y += other.y;
+    }
 };
 
 pub const Tree = struct {
@@ -85,10 +95,12 @@ pub fn build(node: anytype, constraints: Constraints) !Build(@TypeOf(node)) {
 }
 
 fn buildInput(node: anytype, constraints: Constraints) !Build(@TypeOf(node)) {
+    const Node = @TypeOf(node);
     const result = try build(node.config.child, constraints);
     return .{
         .state = .{
             .size = result.size,
+            .opts = configOpts(Node.options, node.config),
             .child = result.state,
         },
         .render = result.render,
@@ -100,41 +112,128 @@ fn buildLayout(node: anytype, constraints: Constraints) !Build(@TypeOf(node)) {
     const Node = @TypeOf(node);
     const Slots = Node.slots;
     const Layout = Node.layout;
-    var children = if (@TypeOf(Slots) == type)
-        slottedChildren(Slots, node.config)
-    else switch (Slots) {
-        .Single => singleChild(node.config),
-        .SingleOptional => singleOptionalChild(node.config),
-        .Indexed => indexedChildren(node.config),
-        else => @compileError(""),
-    };
+    const has_opts = std.meta.fields(Layout).len == 0;
 
-    const size = if (std.meta.fields(Layout).len == 0)
-        try Layout.layout(constraints, &children)
-    else
-        try Layout.layout(configOpts(Layout, node.config), constraints, &children);
+    if (@TypeOf(Slots) == type or Slots == .Indexed) {
+        const children = if (@TypeOf(Slots) == type)
+            slottedChildren(Slots, node.config)
+        else
+            indexedChildren(node.config);
 
-    const result = if (@TypeOf(Slots) == type)
-        slotsResult(@TypeOf(node.config), children)
-    else if (Slots == .Indexed)
-        indexedResult(children)
-    else if (Slots == .SingleOptional) blk: {
-        if (children) |child| {
-            break :blk child;
-        }
+        const size = if (has_opts)
+            try Layout.layout(configOpts(Layout, node.config), constraints, &children)
+        else
+            try Layout.layout(constraints, &children);
+
+        const result = if (@TypeOf(Slots) == type)
+            slotsResult(@TypeOf(node.config), children)
+        else
+            indexedResult(children);
 
         return .{
-            .state = null,
-            .render = null,
+            .state = result.state,
+            .render = result.render,
             .size = size,
         };
-    } else children;
+    }
 
-    return .{
-        .state = result.state,
-        .render = result.render,
-        .size = size,
-    };
+    if (Slots == .SingleOptional) {
+        const child = singleOptionalChild(node.config);
+        const size = if (has_opts)
+            try Layout.layout(configOpts(Layout, node.config), constraints, child)
+        else
+            try Layout.layout(constraints, child);
+
+        return .{
+            .state = if (child) |c| c.inner.state,
+            .render = if (child) |c| c.inner.render,
+            .size = size,
+        };
+    }
+
+    if (Slots == .Single) {
+        const child = singleChild(node.config);
+        const size = if (has_opts)
+            try Layout.layot(configOpts(Layout, node.config), constraints, &child)
+        else
+            try Layout.layout(constraints, &child);
+
+        return .{
+            .state = child.state,
+            .render = child.render,
+            .size = size,
+        };
+    }
+
+    @compileError("");
+}
+
+fn singleChild(config: anytype) SingleChild(@TypeOf(config)) {
+    const Config = @TypeOf(config);
+    const field_name = singleChildFieldName(Config).?;
+    return childLayout(@field(config, field_name));
+}
+
+fn SingleChild(comptime Config: type) type {
+    if (singleChildFieldName(Config)) |field_name| {
+        return ChildLayout(meta.FieldType(Config, field_name));
+    }
+    @compileError("");
+}
+
+fn singleOptionalChild(config: anytype) SingleOptionalChild(@TypeOf(config)) {
+    const Config = @TypeOf(config);
+    if (singleChildFieldName(Config)) |field_name| {
+        const Child = meta.FieldType(Config, field_name);
+        if (@typeInfo(Child) == .Optional) {
+            if (@field(config, field_name)) |child| {
+                return .{ .inner = childLayout(child) };
+            }
+        } else {
+            return .{ .inner = childLayout(@field(config, field_name)) };
+        }
+    }
+    return null;
+}
+
+fn SingleOptionalChild(comptime Config: type) type {
+    if (singleChildFieldName(Config)) |field_name| {
+        return ?struct {
+            inner: *Inner,
+            width: u16 = 0,
+            height: u16 = 0,
+
+            const Inner = ChildLayout(meta.FieldType(field_name));
+            const Self = @This();
+
+            pub fn info(self: *Self, id: anytype) ?Inner.Info {
+                return self.inner.info(id);
+            }
+
+            pub fn layout(self: *Self, constraints: Constraints) !void {
+                try self.inner.layout(constraints);
+                self.width = self.inner.width;
+                self.height = self.inner.height;
+            }
+
+            pub fn offset(self: *Self, by: Offset) void {
+                self.inner.offset(by);
+            }
+        };
+    }
+    return ?void;
+}
+
+fn singleChildFieldName(comptime Config: type) ?[]const u8 {
+    if (@hasField(Config, "child")) {
+        return "child";
+    }
+
+    if (std.meta.trait.isTuple(Config) and std.meta.fields(Config).len == 1) {
+        return "0";
+    }
+
+    return null;
 }
 
 fn slotsResult(comptime Config: type, children: anytype) SlotsResult(Config, @TypeOf(children)) {
@@ -143,27 +242,26 @@ fn slotsResult(comptime Config: type, children: anytype) SlotsResult(Config, @Ty
     const Render = std.meta.FieldType(Result, .render);
     var state: State = undefined;
     var render: Render = undefined;
-    var len = 0;
 
     const info = @typeInfo(@TypeOf(children));
-    inline for (info.fields) |field| {
+    inline for (info.fields, 0..) |field, i| {
         if (@typeInfo(field.type) == ?void) {
-            continue;
+            state[i] = undefined;
+            render[i] = undefined;
         }
 
         if (@typeInfo(field.type) == .Optional) {
             if (@field(children, field.name)) |child| {
-                state[len] = child.state.?;
-                render[len] = child.render.?;
+                state[i] = child.state;
+                render[i] = child.render;
             } else {
-                state[len] = null;
-                render[len] = null;
+                state[i] = null;
+                render[i] = null;
             }
         } else {
-            state[len] = @field(children, field.name).state.?;
-            render[len] = @field(children, field.name).render.?;
+            state[i] = @field(children, field.name).state;
+            render[i] = @field(children, field.name).render;
         }
-        len += 1;
     }
 
     return Result{
@@ -174,11 +272,12 @@ fn slotsResult(comptime Config: type, children: anytype) SlotsResult(Config, @Ty
 
 fn SlotsResult(comptime Config: type, comptime Children: type) type {
     const info = @typeInfo(Children);
-    var state_fields: [info.fields.len]std.builtin.Type.StructField = undefined;
-    var render_fields: [info.fields.len]std.builtin.Type.StructField = undefined;
-    var len = 0;
-    for (info.fields) |field| {
+    var state_types: [info.fields.len]type = undefined;
+    var render_types: [info.fields.len]type = undefined;
+    for (info.fields, 0..) |field, i| {
         if (field.type == ?void) {
+            state_types[i] = void;
+            render_types[i] = void;
             continue;
         }
 
@@ -188,51 +287,18 @@ fn SlotsResult(comptime Config: type, comptime Children: type) type {
             field.type;
 
         const ConfigField = meta.FieldType(Config, field.name);
-        const State = if (@typeInfo(ConfigField) == .Optional)
+        state_types[i] = if (@typeInfo(ConfigField) == .Optional)
             ?Child.State
         else
             Child.State;
 
-        const Render = if (@typeInfo(ConfigField) == .Optional)
+        render_types[i] = if (@typeInfo(ConfigField) == .Optional)
             ?Child.Render
         else
             Child.Render;
-
-        state_fields[len] = .{
-            .name = meta.numFieldName(len),
-            .type = State,
-            .default_value = null,
-            .is_comptime = false,
-            .alignment = @alignOf(State),
-        };
-        render_fields[len] = .{
-            .name = meta.numFieldName(len),
-            .type = Render,
-            .default_value = null,
-            .is_comptime = false,
-            .alignment = @alignOf(Render),
-        };
-        len += 1;
     }
-    const State = @Type(.{
-        .Struct = .{
-            .layout = .Auto,
-            .backing_integer = null,
-            .fields = state_fields[0..len],
-            .decls = &[_]std.builtin.Type.Declaration{},
-            .is_tuple = true,
-        },
-    });
-    const Render = @Type(.{
-        .Struct = .{
-            .layout = .Auto,
-            .backing_integer = null,
-            .fields = state_fields[0..len],
-            .decls = &[_]std.builtin.Type.Declaration{},
-            .is_tuple = true,
-        },
-    });
-
+    const State = meta.Tuple(state_types);
+    const Render = meta.Tuple(render_types);
     return struct {
         state: State,
         render: Render,
@@ -306,66 +372,16 @@ fn SlottedChildren(comptime Slots: type, comptime Config: type) type {
     });
 }
 
-fn singleChild(config: anytype) SingleChild(@TypeOf(config)) {
-    const Config = @TypeOf(config);
-    if (@hasField(Config, "child")) {
-        return childLayout(config.child);
-    }
-
-    if (std.meta.trait.isTuple(Config)) {
-        return childLayout(config[0]);
-    }
-
-    @compileError("");
-}
-
-fn SingleChild(comptime Config: type) type {
-    if (@hasField(Config, "child")) {
-        return std.meta.FieldType(Config, .child);
-    }
-    @compileError("");
-}
-
-fn singleOptionalChild(config: anytype) SingleOptionalChild(@TypeOf(config)) {
-    const Config = @TypeOf(config);
-    const field_name = if (@hasField(Config, "child"))
-        "child"
-    else blk: {
-        if (std.meta.trait.isTuple(Config)) {
-            break :blk "0";
-        }
-        @compileError("");
-    };
-
-    const ChildNode = meta.FieldType(Config, field_name);
-    if (@typeInfo(ChildNode) == .Optional) {
-        if (@field(config, field_name)) |child| {
-            return childLayout(child);
-        }
-    } else {
-        return childLayout(@field(config, field_name));
-    }
-
-    return null;
-}
-
-fn SingleOptionalChild(comptime Config: type) type {
-    if (@hasField(Config, "child")) {
-        return std.meta.FieldType(Config, .child);
-    }
-    return void;
-}
-
 fn indexedResult(children: anytype) IndexedResult(@TypeOf(children)) {
     const Result = IndexedResult(@TypeOf(children));
     const State = std.meta.FieldType(Result, .state);
     const Render = std.meta.FieldType(Result, .render);
+
     var state: State = undefined;
     var render: Render = undefined;
-
     inline for (children, 0..) |child, i| {
-        state[i] = child.state.?;
-        render[i] = child.render.?;
+        state[i] = child.state;
+        render[i] = child.render;
     }
 
     return Result{
@@ -617,8 +633,8 @@ fn childLayout(node: anytype) ChildLayout(@TypeOf(node)) {
 fn ChildLayout(comptime Node: type) type {
     return struct {
         node: Node,
-        state: ?State = null,
-        render: ?Render = null,
+        state: State,
+        render: Render,
         width: u16 = 0,
         height: u16 = 0,
 
@@ -676,8 +692,10 @@ fn buildRender(node: anytype, constraints: Constraints) Build(@TypeOf(node)) {
             .state = result.state,
             .render = .{
                 .size = result.size,
+                .opts = configOpts(Node.options, node.config),
                 .child = result.render,
             },
+            .size = result.size,
         };
     }
 }
@@ -707,19 +725,159 @@ fn Build(comptime Node: type) type {
 }
 
 fn StateTree(comptime Node: type) type {
-    return switch (Node.kind) {
-        .Input => {},
-        .Layout => {},
-        .Info => {},
-        .Render => {},
+    comptime {
+        return switch (Node.kind) {
+            .Input => StateTreeNode(Node),
+            .Layout => LayoutTree(Node, StateTree),
+            .Info => ChildTree(Node, StateTree),
+            .Render => if (Node.id == .Text)
+                void
+            else
+                ChildTree(Node, StateTree),
+        };
+    }
+}
+
+fn StateTreeNode(comptime Node: type) type {
+    return struct {
+        size: Size,
+        offset: Offset = Offset.zero,
+        opts: Node.options,
+        child: Child,
+
+        pub const Id = Node.id;
+        const Child = ChildTree(Node, StateTree);
+        const Self = @This();
+
+        pub fn offset(self: *Self, by: Offset) void {
+            self.offset.add(by);
+            offsetChild(self.child, by);
+        }
     };
 }
 
 fn RenderTree(comptime Node: type) type {
-    return switch (Node.kind) {
-        .Input => {},
-        .Layout => {},
-        .Info => {},
-        .Render => {},
+    comptime {
+        return switch (Node.kind) {
+            .Input => ChildTree(Node, RenderTree),
+            .Layout => LayoutTree(Node, RenderTree),
+            .Info => ChildTree(Node, RenderTree),
+            .Render => RenderTreeNode(Node),
+        };
+    }
+}
+
+fn RenderTreeNode(comptime Node: type) type {
+    return struct {
+        size: Size,
+        offset: Offset = Offset.zero,
+        opts: Node.options,
+        child: Child,
+
+        pub const Id = Node.id;
+        const Child = if (Node.id == .Text) void else ChildTree(Node, RenderTree);
+        const Self = @This();
+
+        pub fn offset(self: *Self, by: Offset) void {
+            self.offset.add(by);
+            offsetChild(self.child, by);
+        }
     };
+}
+
+fn LayoutTree(comptime Node: type, comptime tree: TreeFn) type {
+    comptime {
+        return if (@TypeOf(Node.slots) == type)
+            SlottedTree(Node, tree)
+        else switch (Node.slots) {
+            .Single => ChildTree(Node, tree),
+            .SingleOptional => blk: {
+                if (@hasField(Node.config, "child")) {
+                    const Child = std.meta.FieldType(Node.config, .child);
+                    if (@typeInfo(Child) == .Optional) {
+                        break :blk ?tree(std.meta.Child(Child));
+                    } else {
+                        break :blk tree(Child);
+                    }
+                }
+                break :blk void;
+            },
+            .Indexed => IndexedTree(Node, tree),
+            else => @compileError(""),
+        };
+    }
+}
+
+fn SlottedTree(comptime Node: type, comptime tree: TreeFn) type {
+    return ChildrenTree(blk: {
+        const info = @typeInfo(Node.slots).Struct;
+        var types: [info.fields.len]type = undefined;
+        for (info.fields, 0..) |field, i| {
+            if (@hasField(Node.config, field.name)) {
+                const Child = meta.FieldType(Node.config, field.name);
+                types[i] = if (@typeInfo(Child) == .Optional)
+                    ?tree(std.meta.Child(Child))
+                else
+                    tree(Child);
+            } else {
+                types[i] = void;
+            }
+        }
+
+        break :blk meta.Tuple(types);
+    });
+}
+
+fn IndexedTree(comptime Node: type, comptime tree: fn (comptime Node: type) type) type {
+    return ChildrenTree(blk: {
+        const Children = if (@hasField(Node.config, "children"))
+            std.meta.FieldType(Node.config, .children)
+        else if (std.meta.trait.isTuple(Node.config))
+            Node.config
+        else
+            @compileError("");
+
+        const info = @typeInfo(Children);
+        var types: [info.fields.len]type = undefined;
+        for (info.fields, 0..) |field, i| {
+            types[i] = tree(field.type);
+        }
+
+        break :blk meta.Tuple(types);
+    });
+}
+
+fn ChildrenTree(comptime Children: type) type {
+    return struct {
+        children: Children,
+
+        const Self = @This();
+
+        pub fn offset(self: *Self, by: Offset) void {
+            inline for (self.children) |child| {
+                offsetChild(child, by);
+            }
+        }
+    };
+}
+
+fn ChildTree(comptime Node: type, comptime tree: TreeFn) type {
+    return tree(std.meta.FieldType(Node.config, .child));
+}
+
+const TreeFn = fn (comptime Node: type) type;
+
+inline fn offsetChild(child: anytype, by: Offset) void {
+    const Child = @TypeOf(child);
+    if (Child == void) {
+        return;
+    }
+
+    if (@typeInfo(Child) == .Optional) {
+        if (child) |c| {
+            c.offset(by);
+        }
+    } else {
+        child.offset(by);
+    }
 }

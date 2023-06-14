@@ -7,8 +7,8 @@ pub fn size(config: anytype) Size(@TypeOf(config)) {
 
 pub fn Size(comptime Config: type) type {
     return tree.LayoutNode(Config, .Size, .SingleOptional, struct {
-        width: ?u16,
-        height: ?u16,
+        width: ?u16 = null,
+        height: ?u16 = null,
 
         pub fn layout(opts: @This(), constraints: tree.Constraints, child: anytype) !tree.Size {
             if (child) |ch| {
@@ -37,7 +37,7 @@ pub fn fill(config: anytype) Fill(@TypeOf(config)) {
 
 pub fn Fill(comptime Config: type) type {
     return tree.LayoutNode(Config, .Fill, .SingleOptional, struct {
-        orientation: ?super.Orientation,
+        orientation: ?super.Orientation = null,
 
         pub fn layout(opts: @This(), constraints: tree.Constraints, child: anytype) !tree.Size {
             if (child) |ch| {
@@ -91,7 +91,7 @@ pub fn center(config: anytype) Center(@TypeOf(config)) {
 
 pub fn Center(comptime Config: type) type {
     return tree.LayoutNode(Config, .Center, .Single, struct {
-        orientation: ?super.Orientation,
+        orientation: ?super.Orientation = null,
 
         pub fn layout(opts: @This(), constraints: tree.Constraints, child: anytype) !tree.Size {
             try child.layout(constraints);
@@ -153,8 +153,8 @@ pub fn linear(config: anytype) Linear(@TypeOf(config)) {
 pub fn Linear(comptime Config: type) type {
     return tree.LayoutNode(Config, .Linear, .Indexed, struct {
         orientation: super.Orientation,
-        main_align: ?LinearMainAlign,
-        cross_align: ?LinearCrossAlign,
+        main_align: ?LinearMainAlign = null,
+        cross_align: ?LinearCrossAlign = null,
 
         pub fn layout(opts: @This(), constraints: tree.Constraints, children: anytype) !tree.Size {
             var remaining_extent: ?u16 = switch (opts.orientation) {
@@ -320,8 +320,8 @@ pub fn linearChild(config: anytype) LinearChild(@TypeOf(config)) {
 
 pub fn LinearChild(comptime Config: type) type {
     return tree.InfoNode(Config, .LinearChild, struct {
-        weight: ?u16,
-        cross_align: ?LinearCrossAlign,
+        weight: ?u16 = null,
+        cross_align: ?LinearCrossAlign = null,
     });
 }
 
