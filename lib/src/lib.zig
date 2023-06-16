@@ -3,7 +3,6 @@ pub const definition = @import("definition.zig");
 pub const channel = @import("channel.zig");
 pub const init = @import("init.zig");
 pub const object = @import("object.zig");
-pub const render = @import("render.zig");
 pub const ui = @import("ui.zig");
 pub const SharedMem = @import("SharedMem.zig");
 

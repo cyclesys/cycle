@@ -54,7 +54,6 @@ pub const RenderTarget = struct {
                 .sampled_bit = true,
                 .input_attachment_bit = true,
             },
-            .undefined,
         );
 
         const memory = try dis.allocateMemory(
@@ -111,7 +110,6 @@ pub const RenderTarget = struct {
             width,
             height,
             vk.ImageUsageFlags{ .color_attachment_bit = true },
-            .undefined,
         );
 
         const memory = try dis.allocateMemory(
@@ -144,7 +142,6 @@ fn createImageAndView(
     width: u32,
     height: u32,
     usage: vk.ImageUsageFlags,
-    initial_layout: vk.ImageLayout,
 ) !struct {
     image: vk.Image,
     view: vk.ImageView,
@@ -169,7 +166,7 @@ fn createImageAndView(
             .sharing_mode = .exclusive,
             .queue_family_index_count = 1,
             .p_queue_family_indices = &queue,
-            .initial_layout = initial_layout,
+            .initial_layout = .undefined,
         },
         null,
     );
