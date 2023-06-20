@@ -1,11 +1,12 @@
 const tree = @import("tree.zig");
 
-pub fn rect(config: anytype) Rect(@TypeOf(config)) {
-    return .{ .config = config };
+pub fn rect(config: anytype) Rect(tree.Child(@TypeOf(config))) {
+    const RectNode = Rect(tree.Child(@TypeOf(config)));
+    return tree.initNode(RectNode, config);
 }
 
-pub fn Rect(comptime Config: type) type {
-    return tree.RenderNode(Config, .Rect, struct {
+pub fn Rect(comptime Child: type) type {
+    return tree.RenderNode(.Rect, Child, struct {
         radius: ?struct {
             top_left: ?u16 = null,
             top_right: ?u16 = null,
@@ -15,20 +16,19 @@ pub fn Rect(comptime Config: type) type {
     });
 }
 
-pub fn oval(config: anytype) Oval(@TypeOf(config)) {
-    return .{ .config = config };
+pub fn oval(config: anytype) Oval(tree.Child(@TypeOf(config))) {
+    const OvalNode = Oval(tree.Child(@TypeOf(config)));
+    return tree.initNode(OvalNode, config);
 }
 
-pub fn Oval(comptime Config: type) type {
-    return tree.RenderNode(Config, .Oval, struct {});
+pub fn Oval(comptime Child: type) type {
+    return tree.RenderNode(.Oval, Child, struct {});
 }
 
-pub fn text(config: anytype) Text(@TypeOf(config)) {
-    return .{ .config = config };
+pub fn text(config: anytype) Text {
+    return tree.InitNode(Text, config);
 }
 
-pub fn Text(comptime Config: type) type {
-    return tree.RenderNode(Config, .Text, struct {
-        text: []const u8,
-    });
-}
+pub const Text = tree.RenderNode(.Text, void, struct {
+    text: []const u8,
+});
