@@ -18,8 +18,7 @@ pub fn build(b: *std.Build) !void {
     const vulkan = vulkan_step.getModule();
 
     const freetype = ftgen.module(b);
-    // TODO: currently broken
-    //const harfbuzz = ftgen.harfbuzzModule(b);
+    const harfbuzz = ftgen.harfbuzzModule(b);
 
     const lib = b.createModule(.{
         .source_file = .{ .path = "lib/src/lib.zig" },
@@ -36,10 +35,10 @@ pub fn build(b: *std.Build) !void {
                 .name = "freetype",
                 .module = freetype,
             },
-            //.{
-            //    .name = "harfbuzz",
-            //    .module = harfbuzz,
-            //},
+            .{
+                .name = "harfbuzz",
+                .module = harfbuzz,
+            },
         },
     });
 
@@ -50,7 +49,7 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
     });
 
-    ftgen.link(b, exe, .{}); // .{ .harfbuzz = .{} });
+    ftgen.link(b, exe, .{ .harfbuzz = .{} });
 
     exe.addModule("lib", lib);
     exe.addModule("vulkan", vulkan);
@@ -67,12 +66,17 @@ pub fn build(b: *std.Build) !void {
     const run_step = b.step("run", "Run the app");
     run_step.dependOn(&run_cmd.step);
 
-    const exe_tests = b.addTest(.{
-        .root_source_file = .{ .path = "src/main.zig" },
+    const lib_tests = b.addTest(.{
+        .root_source_file = .{ .path = "lib/src/lib.zig" },
         .target = target,
         .optimize = optimize,
     });
 
-    const test_step = b.step("test", "Run unit tests");
-    test_step.dependOn(&exe_tests.step);
+    lib_tests.addModule("win32", win32);
+    lib_tests.addModule("freetype", freetype);
+    lib_tests.addModule("harfbuzz", harfbuzz);
+
+    const run_lib_tests = b.addRunArtifact(lib_tests);
+    const lib_test_step = b.step("test_lib", "Run lib tests");
+    lib_test_step.dependOn(&run_lib_tests.step);
 }
