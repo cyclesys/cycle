@@ -1,5 +1,5 @@
 const super = @import("../nodes.zig");
-const tree = @import("tree.zig");
+const tree = @import("../tree.zig");
 
 pub fn fill(config: anytype) Fill(tree.OptionalChild(@TypeOf(config))) {
     const FillNode = Fill(tree.OptionalChild(@TypeOf(config)));

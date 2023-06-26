@@ -1,5 +1,5 @@
 const super = @import("../nodes.zig");
-const tree = @import("tree.zig");
+const tree = @import("../tree.zig");
 
 pub fn center(config: anytype) Center(tree.Child(@TypeOf(config))) {
     const CenterNode = Center(tree.Child(@TypeOf(config)));

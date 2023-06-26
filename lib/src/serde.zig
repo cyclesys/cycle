@@ -1,7 +1,5 @@
 const std = @import("std");
 
-const ByteList = std.ArrayList(u8);
-
 pub fn serialize(value: anytype, writer: anytype) !void {
     const Type = @TypeOf(value);
     switch (@typeInfo(Type)) {
@@ -67,7 +65,7 @@ pub fn serialize(value: anytype, writer: anytype) !void {
             }
         },
         .Enum => {
-            try writePacked(@enumToInt(value), writer);
+            try writePacked(@intFromEnum(value), writer);
         },
         .Union => |info| {
             if (info.tag_type == null) {
@@ -76,7 +74,7 @@ pub fn serialize(value: anytype, writer: anytype) !void {
 
             switch (value) {
                 inline else => |val, tag| {
-                    try writePacked(@enumToInt(tag), writer);
+                    try writePacked(@intFromEnum(tag), writer);
                     try serialize(val, writer);
                 },
             }
@@ -202,7 +200,7 @@ fn deserializeImpl(comptime Type: type, reader: *Reader) !Type {
         },
         .Enum => |info| {
             const value = try readPacked(info.tag_type, reader);
-            return @intToEnum(Type, value);
+            return @enumFromInt(Type, value);
         },
         .Union => |info| {
             if (info.tag_type == null) {
@@ -211,7 +209,7 @@ fn deserializeImpl(comptime Type: type, reader: *Reader) !Type {
 
             const TagInt = std.meta.Tag(info.tag_type.?);
             const tag_int = try readPacked(TagInt, reader);
-            switch (@intToEnum(info.tag_type.?, tag_int)) {
+            switch (@enumFromInt(info.tag_type.?, tag_int)) {
                 inline else => |tag| {
                     var out = @unionInit(Type, @tagName(tag), undefined);
                     const FieldType = @TypeOf(@field(out, @tagName(tag)));
@@ -228,6 +226,8 @@ fn readPacked(comptime Type: type, reader: *Reader) !Type {
     const ptr = @ptrCast(*align(1) const Type, bytes);
     return ptr.*;
 }
+
+const ByteList = std.ArrayList(u8);
 
 fn serde(comptime Type: type, value: Type) !Type {
     var buf = ByteList.init(std.testing.allocator);

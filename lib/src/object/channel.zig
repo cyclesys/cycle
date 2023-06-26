@@ -143,7 +143,7 @@ pub const SystemMessage = struct {
         size: usize,
 
         fn into(self: *const SharedMemInfo) SharedMem.Error!SharedMem {
-            const handle = @intToPtr(windows.HANDLE, self.handle);
+            const handle = @ptrFromInt(windows.HANDLE, self.handle);
             return SharedMem.import(handle, self.size);
         }
     };

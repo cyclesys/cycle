@@ -1,8 +1,4 @@
-const windows = struct {
-    const mod = @import("win32");
-    usingnamespace mod.foundation;
-    usingnamespace mod.system.memory;
-};
+const windows = @import("windows");
 
 const Self = @This();
 

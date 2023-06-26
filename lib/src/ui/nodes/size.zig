@@ -1,4 +1,4 @@
-const tree = @import("tree.zig");
+const tree = @import("../tree.zig");
 
 pub fn size(config: anytype) Size(tree.OptionalChild(@TypeOf(config))) {
     const SizeNode = Size(tree.OptionalChild(@TypeOf(config)));

@@ -40,7 +40,7 @@ pub const InitChannel = struct {
                 }
                 const int_ptr = try std.fmt.parseUnsigned(usize, self.args[self.pos], 16);
                 self.pos += 1;
-                return @intToPtr(windows.HANDLE, int_ptr);
+                return @ptrFromInt(windows.HANDLE, int_ptr);
             }
         };
 
@@ -154,9 +154,9 @@ pub const SystemMessage = union(enum) {
         file: usize,
 
         pub fn into(self: *const ChannelInfo) channel.Error!channel.Channel {
-            const wait_ev = @intToPtr(windows.HANDLE, self.wait_ev);
-            const signal_ev = @intToPtr(windows.HANDLE, self.signal_ev);
-            const file = @intToPtr(windows.HANDLE, self.file);
+            const wait_ev = @ptrFromInt(windows.HANDLE, self.wait_ev);
+            const signal_ev = @ptrFromInt(windows.HANDLE, self.signal_ev);
+            const file = @ptrFromInt(windows.HANDLE, self.file);
             return channel.Channel.import(wait_ev, signal_ev, file);
         }
     };

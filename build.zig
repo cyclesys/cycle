@@ -6,8 +6,8 @@ pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const win32 = b.createModule(.{
-        .source_file = .{ .path = "deps/zigwin32/win32.zig" },
+    const windows = b.createModule(.{
+        .source_file = .{ .path = "windows.zig" },
     });
 
     const vulkan_sdk_path = b.env_map.get("VULKAN_SDK");
@@ -20,12 +20,16 @@ pub fn build(b: *std.Build) !void {
     const freetype = ftgen.module(b);
     const harfbuzz = ftgen.harfbuzzModule(b);
 
+    const known_folders = b.createModule(.{
+        .source_file = .{ .path = "deps/known-folders/known-folders.zig" },
+    });
+
     const lib = b.createModule(.{
         .source_file = .{ .path = "lib/src/lib.zig" },
         .dependencies = &.{
             .{
-                .name = "win32",
-                .module = win32,
+                .name = "windows",
+                .module = windows,
             },
             .{
                 .name = "vulkan",
@@ -38,6 +42,10 @@ pub fn build(b: *std.Build) !void {
             .{
                 .name = "harfbuzz",
                 .module = harfbuzz,
+            },
+            .{
+                .name = "known_folders",
+                .module = known_folders,
             },
         },
     });
@@ -72,9 +80,10 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
     });
 
-    lib_tests.addModule("win32", win32);
+    lib_tests.addModule("windows", windows);
     lib_tests.addModule("freetype", freetype);
     lib_tests.addModule("harfbuzz", harfbuzz);
+    lib_tests.addModule("known_folders", known_folders);
 
     const run_lib_tests = b.addRunArtifact(lib_tests);
     const lib_test_step = b.step("test_lib", "Run lib tests");

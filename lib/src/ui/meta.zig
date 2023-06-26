@@ -86,7 +86,7 @@ pub fn Merge(comptime Expected: type, comptime Actual: type) type {
 }
 
 pub fn FieldType(comptime T: type, comptime name: []const u8) type {
-    return std.meta.FieldType(T, @intToEnum(
+    return std.meta.FieldType(T, @enumFromInt(
         std.meta.FieldEnum(T),
         std.meta.fieldIndex(T, name),
     ));

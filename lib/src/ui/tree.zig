@@ -323,7 +323,7 @@ pub fn IterableLayoutChildren(comptime ChildNodes: type, comptime Slot: type) ty
                 const child = Child{
                     .states = self.states,
                     .slot = &self.slots[self.idx],
-                    .tag = @intToEnum(Child.Tag, self.idx),
+                    .tag = @enumFromInt(Child.Tag, self.idx),
                 };
                 self.idx += 1;
                 return child;
@@ -386,7 +386,7 @@ pub fn IterableLayoutChildren(comptime ChildNodes: type, comptime Slot: type) ty
             return Child{
                 .states = self.states,
                 .slot = &self.slots[idx],
-                .tag = @intToEnum(Child.Tag, idx),
+                .tag = @enumFromInt(Child.Tag, idx),
             };
         }
 

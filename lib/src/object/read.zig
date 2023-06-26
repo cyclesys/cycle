@@ -242,14 +242,14 @@ fn MapView(
             const key = readFieldType(
                 KeyView,
                 info.key.*,
-                if (key_needs_index) self.index else undefined,
+                if (key_needs_index) self.index else @as(void, undefined),
                 self.bytes[key_start..key_end],
             ).value;
 
             const value = readFieldType(
                 ValueView,
                 info.value.*,
-                if (value_needs_index) self.index else undefined,
+                if (value_needs_index) self.index else @as(void, undefined),
                 self.bytes[key_end..value_end],
             ).value;
 
@@ -370,14 +370,14 @@ pub fn readObject(
     const TagIndex = meta.NumEnum(info.versions.len);
     // contains `info.versions.len + 1` fields, hence the need for `TagIndex`.
     const VersionTag = VersionEnum(info.versions.len);
-    switch (@intToEnum(TagIndex, version)) {
+    switch (@enumFromInt(TagIndex, version)) {
         inline else => |tag_idx| {
             // this would index out of bounds if converting a `VerTag`, hence
             // the need for `TagIndex`.
-            const field = info.versions[@enumToInt(tag_idx)];
+            const field = info.versions[@intFromEnum(tag_idx)];
 
             // convert the `TagIndex` value to the actual tag value
-            const tag = @intToEnum(VersionTag, @enumToInt(tag_idx));
+            const tag = @enumFromInt(VersionTag, @intFromEnum(tag_idx));
 
             var view = @unionInit(View, @tagName(tag), undefined);
             const FieldType = @TypeOf(@field(view, @tagName(tag)));
@@ -385,7 +385,7 @@ pub fn readObject(
             const read_field = readFieldType(
                 FieldType,
                 field,
-                if (comptime fieldTypeNeedsIndex(field)) index else undefined,
+                if (comptime fieldTypeNeedsIndex(field)) index else @as(void, undefined),
                 read_bytes,
             );
             @field(view, @tagName(tag)) = read_field.value;
@@ -614,7 +614,7 @@ fn readStruct(
         const read_field = readFieldType(
             FieldType,
             field.type,
-            if (comptime fieldTypeNeedsIndex(field.type)) index else undefined,
+            if (comptime fieldTypeNeedsIndex(field.type)) index else @as(void, undefined),
             read_bytes,
         );
         @field(view, field.name) = read_field.value;
@@ -639,7 +639,7 @@ fn readTuple(
         const read_field = readFieldType(
             FieldType,
             field,
-            if (comptime fieldTypeNeedsIndex(field)) index else undefined,
+            if (comptime fieldTypeNeedsIndex(field)) index else @as(void, undefined),
             read_bytes,
         );
         view[i] = read_field.value;
@@ -666,9 +666,9 @@ fn readUnion(
         @panic("invalid bytes when reading union tag");
     }
 
-    switch (@intToEnum(Tag, tag_value)) {
+    switch (@enumFromInt(Tag, tag_value)) {
         inline else => |val| {
-            const field = fields[@enumToInt(val)];
+            const field = fields[@intFromEnum(val)];
 
             var view = @unionInit(View, field.name, undefined);
             const FieldType = @TypeOf(@field(view, field.name));
@@ -676,7 +676,7 @@ fn readUnion(
             const read_field = readFieldType(
                 FieldType,
                 field.type,
-                if (comptime fieldTypeNeedsIndex(field.type)) index else undefined,
+                if (comptime fieldTypeNeedsIndex(field.type)) index else @as(void, undefined),
                 read_bytes,
             );
             @field(view, field.name) = read_field.value;
@@ -701,7 +701,7 @@ fn readEnum(
     }
 
     return .{
-        .value = @intToEnum(View, read_int.value),
+        .value = @enumFromInt(View, read_int.value),
         .bytes = read_int.bytes,
     };
 }
@@ -1325,8 +1325,8 @@ fn writeFieldType(comptime info: definition.FieldType, value: anytype, writer: a
         .Union => |fields| {
             switch (value) {
                 inline else => |val, tag| {
-                    const field = fields[@enumToInt(tag)];
-                    try serde.serialize(@as(usize, @enumToInt(tag)), writer);
+                    const field = fields[@intFromEnum(tag)];
+                    try serde.serialize(@as(usize, @intFromEnum(tag)), writer);
                     var size: usize = @sizeOf(usize);
                     size += try writeFieldType(field.type, val, writer);
                     return size;
@@ -1334,7 +1334,7 @@ fn writeFieldType(comptime info: definition.FieldType, value: anytype, writer: a
             }
         },
         .Enum => {
-            try serde.serialize(@as(usize, @enumToInt(value)), writer);
+            try serde.serialize(@as(usize, @intFromEnum(value)), writer);
             return @sizeOf(usize);
         },
     }

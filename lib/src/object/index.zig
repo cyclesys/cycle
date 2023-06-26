@@ -151,18 +151,18 @@ pub fn ObjectIndex(comptime scheme_fns: anytype) type {
             }
 
             const SchemeEnum = meta.NumEnum(schemes.len);
-            switch (@intToEnum(SchemeEnum, id.scheme)) {
+            switch (@enumFromInt(SchemeEnum, id.scheme)) {
                 inline else => |scheme_val| {
-                    const scheme_slot = @enumToInt(scheme_val);
+                    const scheme_slot = @intFromEnum(scheme_val);
                     const scheme = schemes[scheme_slot];
                     if (id.name >= scheme.objects.len) {
                         return error.ObjectNotDefined;
                     }
 
                     const ObjectEnum = meta.NumEnum(scheme.objects.len);
-                    switch (@intToEnum(ObjectEnum, id.name)) {
+                    switch (@enumFromInt(ObjectEnum, id.name)) {
                         inline else => |object_val| {
-                            const object_slot = @enumToInt(object_val);
+                            const object_slot = @intFromEnum(object_val);
                             return &self.slots[scheme_slot][object_slot];
                         },
                     }
@@ -192,31 +192,34 @@ pub fn ObjectIndex(comptime scheme_fns: anytype) type {
             obj_id: super.ObjectId,
             context: anytype,
             f: anytype,
-        ) !switch (@typeInfo(@TypeOf(f))) {
-            .Fn => |info| blk: {
-                if (info.params.len != 3 or
-                    info.params[0].type == null or info.params[0].type.? != type or
-                    info.params[1].type != null or
-                    info.params[2].type == null or info.params[2].type.? != @TypeOf(context))
-                {
-                    @compileError("`f` must be a fn of type `fn (comptime Obj: type, view: anytype, ctx: @TypeOf(context)) 'some return type'");
-                }
+        ) !blk: {
+            const err = "`f` must be a fn of type `fn (comptime Obj: type, view: View(Obj), ctx: @TypeOf(context)) 'some return type'";
+            switch (@typeInfo(@TypeOf(f))) {
+                .Fn => |info| {
+                    if (info.params.len != 3 or
+                        info.params[0].type == null or info.params[0].type.? != type or
+                        info.params[1].type != null or
+                        info.params[2].type == null or info.params[2].type.? != @TypeOf(context))
+                    {
+                        @compileError(err);
+                    }
 
-                break :blk switch (@typeInfo(info.return_type.?)) {
-                    .ErrorUnion => |return_type| return_type.payload,
-                    else => info.return_type.?,
-                };
-            },
-            else => @compileError("`f` must be a fn of type `fn (comptime Obj: type, view: anytype, ctx: @TypeOf(context)) 'some return type'"),
+                    break :blk switch (@typeInfo(info.return_type.?)) {
+                        .ErrorUnion => |return_type| return_type.payload,
+                        else => info.return_type.?,
+                    };
+                },
+                else => @compileError(err),
+            }
         } {
             if (type_id.scheme >= schemes.len) {
                 return error.SchemeNotDefined;
             }
 
             const SchemeEnum = meta.NumEnum(schemes.len);
-            switch (@intToEnum(SchemeEnum, type_id.scheme)) {
+            switch (@enumFromInt(SchemeEnum, type_id.scheme)) {
                 inline else => |scheme_val| {
-                    const scheme_slot = @enumToInt(scheme_val);
+                    const scheme_slot = @intFromEnum(scheme_val);
                     const scheme = schemes[scheme_slot];
 
                     if (type_id.name >= scheme.objects.len) {
@@ -233,9 +236,9 @@ pub fn ObjectIndex(comptime scheme_fns: anytype) type {
                     };
 
                     const ObjectEnum = meta.NumEnum(scheme.objects.len);
-                    switch (@intToEnum(ObjectEnum, type_id.name)) {
+                    switch (@enumFromInt(ObjectEnum, type_id.name)) {
                         inline else => |object_val| {
-                            const object_slot = @enumToInt(object_val);
+                            const object_slot = @intFromEnum(object_val);
                             const object = scheme.objects[object_slot];
 
                             const Scheme = SchemeFn(define.This);

@@ -1,11 +1,5 @@
 const std = @import("std");
-const windows = struct {
-    const mod = @import("win32");
-    usingnamespace mod.foundation;
-    usingnamespace mod.system.memory;
-    usingnamespace mod.system.threading;
-    usingnamespace mod.system.windows_programming;
-};
+const windows = @import("windows");
 
 const serde = @import("serde.zig");
 const SharedMem = @import("SharedMem.zig");
@@ -103,13 +97,13 @@ pub const Channel = struct {
         const wait_ev = windows.CreateEventW(
             null,
             1,
-            @intCast(windows.BOOL, @boolToInt(start_owned)),
+            @intCast(windows.BOOL, @intFromBool(start_owned)),
             null,
         );
         const signal_ev = windows.CreateEventW(
             null,
             1,
-            @intCast(windows.BOOL, @boolToInt(!start_owned)),
+            @intCast(windows.BOOL, @intFromBool(!start_owned)),
             null,
         );
 
@@ -236,9 +230,9 @@ pub const Channel = struct {
         const result = windows.WaitForSingleObject(self.wait_ev, wait_for);
         return switch (result) {
             windows.WAIT_OBJECT_0 => true,
-            @enumToInt(windows.WAIT_TIMEOUT) => if (timeout == null) false else error.ChannelInvalid,
+            windows.WAIT_TIMEOUT => if (timeout == null) false else error.ChannelInvalid,
             windows.WAIT_ABANDONED => error.ChannelInvalid,
-            @enumToInt(windows.WAIT_FAILED) => error.ChannelInvalid,
+            windows.WAIT_FAILED => error.ChannelInvalid,
             else => unreachable,
         };
     }

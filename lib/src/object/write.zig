@@ -152,7 +152,7 @@ fn UnionValue(comptime fields: []const definition.FieldType.UnionField) type {
 pub fn writeValue(comptime Obj: type, value: ObjectValue(Obj), writer: anytype) !void {
     switch (value) {
         inline else => |val, tag| {
-            const version = @enumToInt(tag);
+            const version = @intFromEnum(tag);
             try serde.serialize(@as(usize, version), writer);
 
             const Version = Obj.def.versions[version];
@@ -208,7 +208,7 @@ fn writeFieldTypeValue(comptime info: definition.FieldType, value: anytype, writ
         .Union => |fields| {
             switch (value) {
                 inline else => |val, tag| {
-                    const field = fields[@enumToInt(tag)];
+                    const field = fields[@intFromEnum(tag)];
                     try writeFieldTypeValue(field.type, val, writer);
                 },
             }
@@ -549,7 +549,7 @@ fn UnionMut(comptime fields: []const definition.FieldType.UnionField) type {
 pub fn writeMut(comptime Obj: type, mut: ObjectMut(Obj), writer: anytype) !void {
     switch (mut) {
         inline else => |val, tag| {
-            const version = @enumToInt(tag);
+            const version = @intFromEnum(tag);
             try serde.serialize(@as(usize, version), writer);
 
             const Version = Obj.def.versions[version];
@@ -587,7 +587,7 @@ fn writeFieldTypeMut(comptime info: definition.FieldType, mut: anytype, writer: 
         .List => |child_info| {
             try serde.serialize(mut.inner.items.len, writer);
             for (mut.inner.items) |item| {
-                try serde.serialize(@enumToInt(item), writer);
+                try serde.serialize(@intFromEnum(item), writer);
                 switch (item) {
                     .Append => |value| {
                         try writeFieldTypeValue(child_info.*, value, writer);
@@ -614,7 +614,7 @@ fn writeFieldTypeMut(comptime info: definition.FieldType, mut: anytype, writer: 
         .Map => |map_info| {
             try serde.serialize(mut.inner.items.len, writer);
             for (mut.inner.items) |item| {
-                try serde.serialize(@enumToInt(item), writer);
+                try serde.serialize(@intFromEnum(item), writer);
                 switch (item) {
                     .Put, .PutNoClobber => |kv| {
                         try writeFieldTypeValue(map_info.key.*, kv.key, writer);
@@ -661,7 +661,7 @@ fn writeFieldTypeMut(comptime info: definition.FieldType, mut: anytype, writer: 
         .Union => |fields| {
             switch (mut) {
                 inline else => |val, tag| {
-                    const field = fields[@enumToInt(tag)];
+                    const field = fields[@intFromEnum(tag)];
                     try writeFieldTypeMut(field.type, val, writer);
                 },
             }
