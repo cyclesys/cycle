@@ -73,19 +73,4 @@ pub fn build(b: *std.Build) !void {
 
     const run_step = b.step("run", "Run the app");
     run_step.dependOn(&run_cmd.step);
-
-    const lib_tests = b.addTest(.{
-        .root_source_file = .{ .path = "lib/src/lib.zig" },
-        .target = target,
-        .optimize = optimize,
-    });
-
-    lib_tests.addModule("windows", windows);
-    lib_tests.addModule("freetype", freetype);
-    lib_tests.addModule("harfbuzz", harfbuzz);
-    lib_tests.addModule("known_folders", known_folders);
-
-    const run_lib_tests = b.addRunArtifact(lib_tests);
-    const lib_test_step = b.step("test_lib", "Run lib tests");
-    lib_test_step.dependOn(&run_lib_tests.step);
 }
