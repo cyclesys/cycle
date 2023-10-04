@@ -1,0 +1,18 @@
+.{
+    .name = "cycle",
+    .version = "0.1.0",
+    .dependencies = .{
+        .cycle_lib = .{
+            .url = "https://github.com/cyclesys/lib/archive/e20f493f48918bfe3d60ca6b9bb015b4a3b2ac5f.tar.gz",
+            .hash = "122086d550676e9e1c17c733e964bf6b8570db81572f1b665d4e5c80093af498a476",
+        },
+        .mach_glfw = .{
+            .url = "https://pkg.machengine.org/mach-glfw/321efd4065b57e31d8ab0bce720852c1d680d443.tar.gz",
+            .hash = "122002e355cf42b8d257efc95229c9ee6be4cca189c1718f86179cb7c21225beeb75",
+        },
+        .vulkan_zig = .{
+            .url = "https://github.com/Snektron/vulkan-zig/archive/348ac5d35a859abd6e3db8b4190c75a417c1894b.tar.gz",
+            .hash = "1220279b91d5bd17fe583dfb5d6d720ea5b06ee6dc0de30b04320780f89c408587e3",
+        },
+    },
+}

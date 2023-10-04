@@ -8,21 +8,6 @@ const win32 = struct {
     usingnamespace mod.system.library_loader;
 };
 
-const BaseDispatch = vk.BaseWrapper(.{
-    .createInstance = true,
-});
-
-const InstanceDispatch = vk.InstanceWrapper(.{
-    .createDevice = true,
-    .createWin32SurfaceKHR = true,
-    .createDebugUtilsMessengerEXT = true,
-    .destroyInstance = true,
-    .destroySurfaceKHR = true,
-});
-
-const DeviceDispatch = vk.DeviceWrapper(.{
-    .destroyDevice = true,
-});
 
 const required_extensions = struct {
     const names = .{
@@ -169,106 +154,8 @@ fn selectPhysicalDevice(
         const dev = devs[i];
 
         const props = dis.getPhysicalDeviceProperties(dev);
-        if (props.device_type != .integrated_gpu and
-            props.device_type != .discrete_gpu)
-        {
-            continue;
-        }
-
-        {
-            var surface_format_count: u32 = 0;
-            _ = try dis.getPhysicalDeviceSurfaceFormatsKHR(
-                dev,
-                surface,
-                &surface_format_count,
-                null,
-            );
-            if (surface_format_count == 0)
-                continue;
-        }
-
-        {
-            var present_mode_count: u32 = 0;
-            _ = try dis.getPhysicalDeviceSurfacePresentModesKHR(
-                dev,
-                surface,
-                &present_mode_count,
-                null,
-            );
-            if (present_mode_count == 0)
-                continue;
-        }
-
-        {
-            var extension_count: u32 = 0;
-            _ = try dis.enumerateDeviceExtensionProperties(dev, null, &extension_count, null);
-
-            const extensions = try allocator.alloc(vk.ExtensionProperties, extension_count);
-            defer allocator.free(extensions);
-
-            _ = try dis.enumerateDeviceExtensionProperties(dev, null, &extension_count, extensions.ptr);
-            if (!required_extensions.contains(extensions))
-                continue;
-        }
-
-        var queue_family_count: u32 = 0;
-        _ = try dis.getPhysicalDeviceQueueFamilyProperties(dev, &queue_family_count, null);
-
-        const queue_families = try allocator.alloc(vk.QueueFamilyProperties, queue_family_count);
-        defer allocator.free(queue_families);
-
-        _ = try dis.getPhysicalDeviceQueueFamilyProperties(
-            dev,
-            &queue_family_count,
-            queue_families.ptr,
-        );
-
-        var gfx: ?u32 = null;
-        var present: ?u32 = null;
-        for (queue_families, 0..) |family, ii| {
-            if (gfx == null and family.queue_flags.graphics_bit) {
-                gfx = ii;
-                if (present == null) continue else break;
-            }
-
-            if (present == null and
-                try dis.getPhysicalDeviceSurfaceSupportKHR(dev, ii, surface) == vk.TRUE)
-            {
-                present = ii;
-                if (gfx == null) continue else break;
-            }
-        }
-
-        if (gfx != null) {
-            if (present == null) {
-                const surface_support = try dis.getPhysicalDeviceSurfaceSupportKHR(dev, gfx.?, surface);
-                if (surface_support != vk.TRUE)
-                    continue;
-
-                present = gfx.?;
-            }
-
-            var surface_format_count: u32 = 0;
-            _ = try dis.getPhysicalDeviceSurfaceFormatsKHR(dev, surface, &surface_format_count, null);
-
-            const surface_formats = allocator.alloc(vk.SurfaceFormatKHR, surface_format_count);
-            defer allocator.free(surface_formats);
-
-            _ = try dis.getPhysicalDeviceSurfaceFormatsKHR(dev, surface, &surface_format_count, surface_formats.ptr);
-
-            const mem_props = dis.getPhysicalDeviceMemoryProperties(dev);
-            return .{
-                .dev = dev,
-                .props = props,
-                .mem_props = mem_props,
-                .gfx = gfx.?,
-                .present = present.?,
-                .format = surface_formats[0].format,
-            };
-        }
     }
 
-    return error.VulkanDeviceNotFound;
 }
 
 fn createDevice(

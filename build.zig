@@ -1,54 +1,9 @@
 const std = @import("std");
-const vkgen = @import("deps/vulkan-zig/generator/index.zig");
-const ftgen = @import("deps/mach-freetype/build.zig");
+const vkz = @import("vulkan_zig");
 
 pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
-
-    const windows = b.createModule(.{
-        .source_file = .{ .path = "windows.zig" },
-    });
-
-    const vulkan_sdk_path = b.env_map.get("VULKAN_SDK");
-    if (vulkan_sdk_path == null) {
-        return error.VulkanSdkNotSet;
-    }
-    const vulkan_step = vkgen.VkGenerateStep.create(b, vulkan_sdk_path.?);
-    const vulkan = vulkan_step.getModule();
-
-    const freetype = ftgen.module(b);
-    const harfbuzz = ftgen.harfbuzzModule(b);
-
-    const known_folders = b.createModule(.{
-        .source_file = .{ .path = "deps/known-folders/known-folders.zig" },
-    });
-
-    const lib = b.createModule(.{
-        .source_file = .{ .path = "lib/src/lib.zig" },
-        .dependencies = &.{
-            .{
-                .name = "windows",
-                .module = windows,
-            },
-            .{
-                .name = "vulkan",
-                .module = vulkan,
-            },
-            .{
-                .name = "freetype",
-                .module = freetype,
-            },
-            .{
-                .name = "harfbuzz",
-                .module = harfbuzz,
-            },
-            .{
-                .name = "known_folders",
-                .module = known_folders,
-            },
-        },
-    });
 
     const exe = b.addExecutable(.{
         .name = "cycle",
@@ -57,10 +12,16 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
     });
 
-    ftgen.link(b, exe, .{ .harfbuzz = .{} });
+    const lib_dep = b.dependency("cycle_lib", .{});
+    exe.addModule("lib", lib_dep.module("cycle_lib"));
+    @import("cycle_lib").link(lib_dep.builder, exe);
 
-    exe.addModule("lib", lib);
-    exe.addModule("vulkan", vulkan);
+    const glfw_dep = b.dependency("mach_glfw", .{});
+    exe.addModule("glfw", glfw_dep.module("mach-glfw"));
+    @import("mach_glfw").link(glfw_dep.builder, exe);
+
+    exe.addModule("vulkan", try vulkanModule(b));
+    exe.addModule("shaders", shadersModule(b));
 
     b.installArtifact(exe);
 
@@ -73,4 +34,68 @@ pub fn build(b: *std.Build) !void {
 
     const run_step = b.step("run", "Run the app");
     run_step.dependOn(&run_cmd.step);
+}
+
+fn vulkanModule(b: *std.Build) !*std.Build.Module {
+    const vk_hash = "3dae5d7fbf332970ae0a97d5ab05ae5db93e62f0";
+    const vk_file_name = vk_hash ++ "-vk.xml";
+    const vk_file_url = "https://raw.githubusercontent.com/KhronosGroup/Vulkan-Docs/" ++
+        vk_hash ++ "/xml/vk.xml";
+
+    const vk_file_path = try ensureCachedFile(b.allocator, b.cache_root.path.?, vk_file_name, vk_file_url);
+
+    const vkzig_dep = b.dependency("vulkan_zig", .{
+        .registry = vk_file_path,
+    });
+    return vkzig_dep.module("vulkan-zig");
+}
+
+fn shadersModule(b: *std.Build) *std.Build.Module {
+    const shader_comp = vkz.ShaderCompileStep.create(
+        b,
+        &[_][]const u8{"glslc"},
+        "-o",
+    );
+    shader_comp.add("vertex", "src/composite/shaders/vert.glsl", .{
+        .args = &[_][]const u8{"-fshader-stage=vertex"},
+    });
+    shader_comp.add("fragment", "src/composite/shaders/frag.glsl", .{
+        .args = &[_][]const u8{"-fshader-stage=fragment"},
+    });
+
+    return shader_comp.getModule();
+}
+
+fn ensureCachedFile(allocator: std.mem.Allocator, cache_root: []const u8, name: []const u8, url: []const u8) ![]const u8 {
+    const path = try std.fs.path.join(allocator, &.{ cache_root, name });
+    const file = std.fs.openFileAbsolute(path, .{}) catch |e| {
+        switch (e) {
+            error.FileNotFound => {
+                const result = try std.ChildProcess.exec(.{
+                    .allocator = allocator,
+                    .argv = &.{ "curl", url, "-o", path },
+                });
+                allocator.free(result.stdout);
+                allocator.free(result.stderr);
+
+                switch (result.term) {
+                    .Exited => |code| {
+                        if (code != 0) {
+                            return error.ExitCodeFailure;
+                        }
+                    },
+                    .Signal, .Stopped, .Unknown => {
+                        return error.ProcessTerminated;
+                    },
+                }
+
+                return path;
+            },
+            else => {
+                return e;
+            },
+        }
+    };
+    file.close();
+    return path;
 }
