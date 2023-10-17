@@ -2,16 +2,16 @@ const std = @import("std");
 const lib = @import("lib");
 
 allocator: std.mem.Allocator,
-schemes: std.StringHashMap(SchemeObjects),
+schemes: std.StringArrayHashMap(SchemeObjects),
 
-const SchemeObjects = std.StringHashMap(ObjectTypes);
+const SchemeObjects = std.StringArrayHashMap(ObjectTypes);
 const ObjectTypes = std.ArrayList(lib.def.Type);
 const Self = @This();
 
 pub fn init(allocator: std.mem.Allocator) Self {
     return Self{
         .allocator = allocator,
-        .schemes = std.StringHashMap(SchemeObjects).init(allocator),
+        .schemes = std.StringArrayHashMap(SchemeObjects).init(allocator),
     };
 }
 
@@ -33,31 +33,46 @@ pub fn deinit(self: *Self) void {
     self.* = undefined;
 }
 
-pub fn update(self: *Self, scheme_name: []const u8, object_name: []const u8, view: lib.chan.View(lib.def.Type)) !usize {
-    const scheme_kv = try self.schemes.getOrPut(scheme_name);
-    if (!scheme_kv.found_existing) {
-        scheme_kv.key_ptr.* = try self.allocator.dupe(u8, scheme_name);
-        scheme_kv.value_ptr.* = SchemeObjects.init(self.allocator);
+pub fn update(
+    self: *Self,
+    scheme_name: []const u8,
+    object_name: []const u8,
+    view: lib.chan.View(lib.def.Type),
+) !lib.def.TypeId {
+    const scheme_kvi = try self.schemes.getOrPut(scheme_name);
+    if (!scheme_kvi.found_existing) {
+        scheme_kvi.key_ptr.* = try self.allocator.dupe(u8, scheme_name);
+        scheme_kvi.value_ptr.* = SchemeObjects.init(self.allocator);
     }
-    const scheme_objects: *SchemeObjects = scheme_kv.value_ptr;
+    const scheme_objects: *SchemeObjects = scheme_kvi.value_ptr;
 
-    const object_kv = try scheme_objects.getOrPut(object_name);
-    if (!object_kv.found_existing) {
-        object_kv.key_ptr.* = try self.allocator.dupe(u8, object_name);
-        object_kv.value_ptr.* = ObjectTypes.init(self.allocator);
+    const object_kvi = try scheme_objects.getOrPut(object_name);
+    if (!object_kvi.found_existing) {
+        object_kvi.key_ptr.* = try self.allocator.dupe(u8, object_name);
+        object_kvi.value_ptr.* = ObjectTypes.init(self.allocator);
     }
-    const object_types: *ObjectTypes = object_kv.value_ptr;
+    const object_types: *ObjectTypes = object_kvi.value_ptr;
 
-    return indexOf(object_types.items, view) orelse {
+    return idOf(scheme_kvi.index, object_kvi.index, object_types.items, view) orelse {
         const t = try createType(self.allocator, view);
         try object_types.append(t);
-        return object_types.items.len - 1;
+        return lib.def.TypeId{
+            .scheme = @intCast(scheme_kvi.index),
+            .name = @intCast(object_kvi.index),
+            .version = @intCast(object_types.items.len - 1),
+        };
     };
 }
 
-fn indexOf(types: []const lib.def.Type, view: lib.chan.View(lib.def.Type)) ?usize {
+fn idOf(scheme: usize, name: usize, types: []const lib.def.Type, view: lib.chan.View(lib.def.Type)) ?lib.def.TypeId {
     for (types, 0..) |t, i| {
-        if (typeEql(t, view)) return i;
+        if (typeEql(t, view)) {
+            return lib.def.TypeId{
+                .scheme = @intCast(scheme),
+                .name = @intCast(name),
+                .version = @intCast(i),
+            };
+        }
     }
     return null;
 }
@@ -373,7 +388,7 @@ fn destroyType(allocator: std.mem.Allocator, t: lib.def.Type) void {
     }
 }
 
-const TestScheme = lib.def.Scheme("scheme", .{
+const TestScheme1 = lib.def.Scheme("scheme1", .{
     lib.def.Object("ObjOne", .{
         struct {
             f1: void,
@@ -401,7 +416,15 @@ const TestScheme = lib.def.Scheme("scheme", .{
     }),
 });
 
-const test_scheme = lib.def.ObjectScheme.from(TestScheme(lib.def.This));
+const TestScheme2 = lib.def.Scheme("scheme2", .{
+    lib.def.Object("ObjOne", .{
+        bool,
+        struct {
+            f1: bool,
+            f2: TestScheme1("ObjTwo"),
+        },
+    }),
+});
 
 test {
     const allocator = std.testing.allocator;
@@ -412,37 +435,110 @@ test {
     var out = std.ArrayList(u8).init(allocator);
     defer out.deinit();
 
-    try lib.chan.write(test_scheme, &out);
+    try lib.chan.write(lib.def.ObjectScheme.from(TestScheme1(lib.def.This)), &out);
 
-    const view = lib.chan.read(lib.def.ObjectScheme, out.items);
-    const scheme_name = view.field(.name);
-    const scheme_objects = view.field(.objects);
+    {
+        const view = lib.chan.read(lib.def.ObjectScheme, out.items);
+        const scheme_name = view.field(.name);
+        const scheme_objects = view.field(.objects);
 
-    const obj_one = scheme_objects.elem(0);
+        const obj_one = scheme_objects.elem(0);
 
-    var index = try table.update(scheme_name, obj_one.field(.name), obj_one.field(.versions).elem(0));
-    try std.testing.expectEqual(@as(usize, 0), index);
+        var index = try table.update(scheme_name, obj_one.field(.name), obj_one.field(.versions).elem(0));
+        try std.testing.expectEqualDeep(lib.def.TypeId{
+            .scheme = 0,
+            .name = 0,
+            .version = 0,
+        }, index);
 
-    index = try table.update(scheme_name, obj_one.field(.name), obj_one.field(.versions).elem(1));
-    try std.testing.expectEqual(@as(usize, 1), index);
+        index = try table.update(scheme_name, obj_one.field(.name), obj_one.field(.versions).elem(1));
+        try std.testing.expectEqualDeep(lib.def.TypeId{
+            .scheme = 0,
+            .name = 0,
+            .version = 1,
+        }, index);
 
-    index = try table.update(scheme_name, obj_one.field(.name), obj_one.field(.versions).elem(0));
-    try std.testing.expectEqual(@as(usize, 0), index);
+        index = try table.update(scheme_name, obj_one.field(.name), obj_one.field(.versions).elem(0));
+        try std.testing.expectEqualDeep(lib.def.TypeId{
+            .scheme = 0,
+            .name = 0,
+            .version = 0,
+        }, index);
 
-    index = try table.update(scheme_name, obj_one.field(.name), obj_one.field(.versions).elem(1));
-    try std.testing.expectEqual(@as(usize, 1), index);
+        index = try table.update(scheme_name, obj_one.field(.name), obj_one.field(.versions).elem(1));
+        try std.testing.expectEqualDeep(lib.def.TypeId{
+            .scheme = 0,
+            .name = 0,
+            .version = 1,
+        }, index);
 
-    const obj_two = scheme_objects.elem(1);
+        const obj_two = scheme_objects.elem(1);
 
-    index = try table.update(scheme_name, obj_two.field(.name), obj_two.field(.versions).elem(0));
-    try std.testing.expectEqual(@as(usize, 0), index);
+        index = try table.update(scheme_name, obj_two.field(.name), obj_two.field(.versions).elem(0));
+        try std.testing.expectEqualDeep(lib.def.TypeId{
+            .scheme = 0,
+            .name = 1,
+            .version = 0,
+        }, index);
 
-    index = try table.update(scheme_name, obj_one.field(.name), obj_one.field(.versions).elem(1));
-    try std.testing.expectEqual(@as(usize, 1), index);
+        index = try table.update(scheme_name, obj_two.field(.name), obj_two.field(.versions).elem(1));
+        try std.testing.expectEqualDeep(lib.def.TypeId{
+            .scheme = 0,
+            .name = 1,
+            .version = 1,
+        }, index);
 
-    index = try table.update(scheme_name, obj_two.field(.name), obj_two.field(.versions).elem(0));
-    try std.testing.expectEqual(@as(usize, 0), index);
+        index = try table.update(scheme_name, obj_two.field(.name), obj_two.field(.versions).elem(0));
+        try std.testing.expectEqualDeep(lib.def.TypeId{
+            .scheme = 0,
+            .name = 1,
+            .version = 0,
+        }, index);
 
-    index = try table.update(scheme_name, obj_one.field(.name), obj_one.field(.versions).elem(1));
-    try std.testing.expectEqual(@as(usize, 1), index);
+        index = try table.update(scheme_name, obj_two.field(.name), obj_two.field(.versions).elem(1));
+        try std.testing.expectEqualDeep(lib.def.TypeId{
+            .scheme = 0,
+            .name = 1,
+            .version = 1,
+        }, index);
+    }
+
+    out.clearRetainingCapacity();
+    try lib.chan.write(lib.def.ObjectScheme.from(TestScheme2(lib.def.This)), &out);
+
+    {
+        const view = lib.chan.read(lib.def.ObjectScheme, out.items);
+        const scheme_name = view.field(.name);
+        const scheme_objects = view.field(.objects);
+
+        const obj_one = scheme_objects.elem(0);
+
+        var index = try table.update(scheme_name, obj_one.field(.name), obj_one.field(.versions).elem(0));
+        try std.testing.expectEqualDeep(lib.def.TypeId{
+            .scheme = 1,
+            .name = 0,
+            .version = 0,
+        }, index);
+
+        index = try table.update(scheme_name, obj_one.field(.name), obj_one.field(.versions).elem(1));
+        try std.testing.expectEqualDeep(lib.def.TypeId{
+            .scheme = 1,
+            .name = 0,
+            .version = 1,
+        }, index);
+
+        index = try table.update(scheme_name, obj_one.field(.name), obj_one.field(.versions).elem(0));
+        try std.testing.expectEqualDeep(lib.def.TypeId{
+            .scheme = 1,
+            .name = 0,
+            .version = 0,
+        }, index);
+
+        index = try table.update(scheme_name, obj_one.field(.name), obj_one.field(.versions).elem(1));
+        try std.testing.expectEqualDeep(lib.def.TypeId{
+            .scheme = 1,
+            .name = 0,
+            .version = 1,
+        }, index);
+    }
 }
