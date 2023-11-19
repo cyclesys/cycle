@@ -12,9 +12,9 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
     });
 
-    const lib_dep = b.dependency("cycle_lib", .{});
-    exe.addModule("lib", lib_dep.module("cycle_lib"));
-    @import("cycle_lib").link(lib_dep.builder, exe);
+    const lib_dep = b.dependency("cycle", .{});
+    exe.addModule("cycle", lib_dep.module("cycle"));
+    @import("cycle").link(lib_dep.builder, exe);
 
     const glfw_dep = b.dependency("mach_glfw", .{});
     exe.addModule("glfw", glfw_dep.module("mach-glfw"));
@@ -23,6 +23,10 @@ pub fn build(b: *std.Build) !void {
     exe.addModule("vulkan", try vulkanModule(b));
     exe.addModule("shaders", shadersModule(b));
 
+    const known_folders_dep = b.dependency("known_folders", .{});
+    exe.addModule("known_folders", known_folders_dep.module("known-folders"));
+
+    exe.linkLibC();
     b.installArtifact(exe);
 
     const run_cmd = b.addRunArtifact(exe);
@@ -34,6 +38,17 @@ pub fn build(b: *std.Build) !void {
 
     const run_step = b.step("run", "Run the app");
     run_step.dependOn(&run_cmd.step);
+
+    const main_tests = b.addTest(.{
+        .root_source_file = .{ .path = "src/main.zig" },
+        .target = target,
+        .optimize = optimize,
+    });
+    main_tests.addModule("cycle", lib_dep.module("cycle"));
+
+    const run_main_tests = b.addRunArtifact(main_tests);
+    const main_tests_step = b.step("test", "Run main tests");
+    main_tests_step.dependOn(&run_main_tests.step);
 }
 
 fn vulkanModule(b: *std.Build) !*std.Build.Module {

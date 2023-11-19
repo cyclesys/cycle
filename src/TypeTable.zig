@@ -1,17 +1,18 @@
 const std = @import("std");
-const lib = @import("lib");
+const cy = @import("cycle");
 
 allocator: std.mem.Allocator,
-schemes: std.StringArrayHashMap(SchemeObjects),
+schemes: Schemes,
 
-const SchemeObjects = std.StringArrayHashMap(ObjectTypes);
-const ObjectTypes = std.ArrayList(lib.def.Type);
+const Schemes = std.StringArrayHashMap(Objects);
+const Objects = std.StringArrayHashMap(Types);
+const Types = std.ArrayList(cy.def.Type);
 const Self = @This();
 
 pub fn init(allocator: std.mem.Allocator) Self {
     return Self{
         .allocator = allocator,
-        .schemes = std.StringArrayHashMap(SchemeObjects).init(allocator),
+        .schemes = Schemes.init(allocator),
     };
 }
 
@@ -21,7 +22,7 @@ pub fn deinit(self: *Self) void {
         var object_iter = scheme.value_ptr.iterator();
         while (object_iter.next()) |object| {
             for (object.value_ptr.items) |t| {
-                destroyType(self.allocator, t);
+                deinitType(self.allocator, t);
             }
             object.value_ptr.deinit();
             self.allocator.free(object.key_ptr.*);
@@ -33,41 +34,60 @@ pub fn deinit(self: *Self) void {
     self.* = undefined;
 }
 
+pub fn get(self: *const Self, id: cy.def.TypeId) !cy.def.Type {
+    const schemes: []const Objects = self.schemes.values();
+    if (id.scheme >= schemes.len) {
+        return error.SchemeNotDefined;
+    }
+
+    const objects: []const Types = schemes[id.scheme].values();
+    if (id.name >= objects.len) {
+        return error.ObjectNotDefined;
+    }
+
+    const types: []const cy.def.Type = objects[id.name].items;
+    if (id.version >= types.len) {
+        return error.VersionNotDefined;
+    }
+
+    return types[id.version];
+}
+
 pub fn update(
     self: *Self,
     scheme_name: []const u8,
     object_name: []const u8,
-    view: lib.chan.View(lib.def.Type),
-) !lib.def.TypeId {
-    const scheme_kvi = try self.schemes.getOrPut(scheme_name);
-    if (!scheme_kvi.found_existing) {
-        scheme_kvi.key_ptr.* = try self.allocator.dupe(u8, scheme_name);
-        scheme_kvi.value_ptr.* = SchemeObjects.init(self.allocator);
+    view: cy.chan.View(cy.def.Type),
+) !cy.def.TypeId {
+    const scheme_gop = try self.schemes.getOrPut(scheme_name);
+    if (!scheme_gop.found_existing) {
+        scheme_gop.key_ptr.* = try self.allocator.dupe(u8, scheme_name);
+        scheme_gop.value_ptr.* = Objects.init(self.allocator);
     }
-    const scheme_objects: *SchemeObjects = scheme_kvi.value_ptr;
+    const objects: *Objects = scheme_gop.value_ptr;
 
-    const object_kvi = try scheme_objects.getOrPut(object_name);
-    if (!object_kvi.found_existing) {
-        object_kvi.key_ptr.* = try self.allocator.dupe(u8, object_name);
-        object_kvi.value_ptr.* = ObjectTypes.init(self.allocator);
+    const object_gop = try objects.getOrPut(object_name);
+    if (!object_gop.found_existing) {
+        object_gop.key_ptr.* = try self.allocator.dupe(u8, object_name);
+        object_gop.value_ptr.* = Types.init(self.allocator);
     }
-    const object_types: *ObjectTypes = object_kvi.value_ptr;
+    const types: *Types = object_gop.value_ptr;
 
-    return idOf(scheme_kvi.index, object_kvi.index, object_types.items, view) orelse {
-        const t = try createType(self.allocator, view);
-        try object_types.append(t);
-        return lib.def.TypeId{
-            .scheme = @intCast(scheme_kvi.index),
-            .name = @intCast(object_kvi.index),
-            .version = @intCast(object_types.items.len - 1),
+    return idOf(scheme_gop.index, object_gop.index, types.items, view) orelse {
+        const t = try initType(self.allocator, view);
+        try types.append(t);
+        return cy.def.TypeId{
+            .scheme = @intCast(scheme_gop.index),
+            .name = @intCast(object_gop.index),
+            .version = @intCast(types.items.len - 1),
         };
     };
 }
 
-fn idOf(scheme: usize, name: usize, types: []const lib.def.Type, view: lib.chan.View(lib.def.Type)) ?lib.def.TypeId {
+fn idOf(scheme: usize, name: usize, types: []const cy.def.Type, view: cy.chan.View(cy.def.Type)) ?cy.def.TypeId {
     for (types, 0..) |t, i| {
         if (typeEql(t, view)) {
-            return lib.def.TypeId{
+            return cy.def.TypeId{
                 .scheme = @intCast(scheme),
                 .name = @intCast(name),
                 .version = @intCast(i),
@@ -77,14 +97,14 @@ fn idOf(scheme: usize, name: usize, types: []const lib.def.Type, view: lib.chan.
     return null;
 }
 
-fn typeEql(t: lib.def.Type, view: lib.chan.View(lib.def.Type)) bool {
+fn typeEql(t: cy.def.Type, view: cy.chan.View(cy.def.Type)) bool {
     const tag = view.tag();
     if (t != tag) {
         return false;
     }
 
     return switch (t) {
-        .Void, .Bool, .String => true,
+        .Void, .Bool, .String, .Any => true,
         .Int => |left| blk: {
             const right = view.value(.Int);
             break :blk left.signedness == right.field(.signedness) and
@@ -134,7 +154,7 @@ fn typeEql(t: lib.def.Type, view: lib.chan.View(lib.def.Type)) bool {
                 for (left.fields, 0..) |lf, i|
             {
                 const rf = right_fields.elem(i);
-                if (!typeEql(lf, rf)) {
+                if (!typeEql(lf.type, rf.type)) {
                     break false;
                 }
             } else true;
@@ -178,16 +198,17 @@ fn typeEql(t: lib.def.Type, view: lib.chan.View(lib.def.Type)) bool {
     };
 }
 
-fn createType(allocator: std.mem.Allocator, view: lib.chan.View(lib.def.Type)) std.mem.Allocator.Error!lib.def.Type {
+fn initType(allocator: std.mem.Allocator, view: cy.chan.View(cy.def.Type)) std.mem.Allocator.Error!cy.def.Type {
     const tag = view.tag();
     return switch (tag) {
         .Void => .Void,
         .Bool => .Bool,
         .String => .String,
+        .Any => .Any,
         .Int => blk: {
             const value = view.value(.Int);
-            break :blk lib.def.Type{
-                .Int = lib.def.Type.Int{
+            break :blk cy.def.Type{
+                .Int = cy.def.Type.Int{
                     .signedness = value.field(.signedness),
                     .bits = value.field(.bits),
                 },
@@ -195,24 +216,24 @@ fn createType(allocator: std.mem.Allocator, view: lib.chan.View(lib.def.Type)) s
         },
         .Float => blk: {
             const value = view.value(.Float);
-            break :blk lib.def.Type{
-                .Float = lib.def.Type.Float{
+            break :blk cy.def.Type{
+                .Float = cy.def.Type.Float{
                     .bits = value.field(.bits),
                 },
             };
         },
         .Optional => blk: {
             const value = view.value(.Optional);
-            break :blk lib.def.Type{
-                .Optional = lib.def.Type.Optional{
+            break :blk cy.def.Type{
+                .Optional = cy.def.Type.Optional{
                     .child = try allocType(allocator, value.field(.child)),
                 },
             };
         },
         .Array => blk: {
             const value = view.value(.Array);
-            break :blk lib.def.Type{
-                .Array = lib.def.Type.Array{
+            break :blk cy.def.Type{
+                .Array = cy.def.Type.Array{
                     .len = value.field(.len),
                     .child = try allocType(allocator, value.field(.child)),
                 },
@@ -220,16 +241,16 @@ fn createType(allocator: std.mem.Allocator, view: lib.chan.View(lib.def.Type)) s
         },
         .List => blk: {
             const value = view.value(.List);
-            break :blk lib.def.Type{
-                .List = lib.def.Type.List{
+            break :blk cy.def.Type{
+                .List = cy.def.Type.List{
                     .child = try allocType(allocator, value.field(.child)),
                 },
             };
         },
         .Map => blk: {
             const value = view.value(.Map);
-            break :blk lib.def.Type{
-                .Map = lib.def.Type.Map{
+            break :blk cy.def.Type{
+                .Map = cy.def.Type.Map{
                     .key = try allocType(allocator, value.field(.key)),
                     .value = try allocType(allocator, value.field(.value)),
                 },
@@ -238,16 +259,16 @@ fn createType(allocator: std.mem.Allocator, view: lib.chan.View(lib.def.Type)) s
         .Struct => blk: {
             const value = view.value(.Struct);
             const fields_view = value.field(.fields);
-            const fields = try allocator.alloc(lib.def.Type.Struct.Field, fields_view.len());
+            const fields = try allocator.alloc(cy.def.Type.Struct.Field, fields_view.len());
             for (0..fields_view.len()) |i| {
                 const field = fields_view.elem(i);
-                fields[i] = lib.def.Type.Struct.Field{
+                fields[i] = cy.def.Type.Struct.Field{
                     .name = try allocator.dupe(u8, field.field(.name)),
-                    .type = try createType(allocator, field.field(.type)),
+                    .type = try initType(allocator, field.field(.type)),
                 };
             }
-            break :blk lib.def.Type{
-                .Struct = lib.def.Type.Struct{
+            break :blk cy.def.Type{
+                .Struct = cy.def.Type.Struct{
                     .fields = fields,
                 },
             };
@@ -255,12 +276,14 @@ fn createType(allocator: std.mem.Allocator, view: lib.chan.View(lib.def.Type)) s
         .Tuple => blk: {
             const value = view.value(.Tuple);
             const fields_view = value.field(.fields);
-            const fields = try allocator.alloc(lib.def.Type, fields_view.len());
+            const fields = try allocator.alloc(cy.def.Type.Tuple.Field, fields_view.len());
             for (0..fields_view.len()) |i| {
-                fields[i] = try createType(allocator, fields_view.elem(i));
+                fields[i] = cy.def.Type.Tuple.Field{
+                    .type = try initType(allocator, fields_view.elem(i)),
+                };
             }
-            break :blk lib.def.Type{
-                .Tuple = lib.def.Type.Tuple{
+            break :blk cy.def.Type{
+                .Tuple = cy.def.Type.Tuple{
                     .fields = fields,
                 },
             };
@@ -268,16 +291,16 @@ fn createType(allocator: std.mem.Allocator, view: lib.chan.View(lib.def.Type)) s
         .Union => blk: {
             const value = view.value(.Union);
             const fields_view = value.field(.fields);
-            const fields = try allocator.alloc(lib.def.Type.Union.Field, fields_view.len());
+            const fields = try allocator.alloc(cy.def.Type.Union.Field, fields_view.len());
             for (0..fields_view.len()) |i| {
                 const field = fields_view.elem(i);
-                fields[i] = lib.def.Type.Union.Field{
+                fields[i] = cy.def.Type.Union.Field{
                     .name = try allocator.dupe(u8, field.field(.name)),
-                    .type = try createType(allocator, field.field(.type)),
+                    .type = try initType(allocator, field.field(.type)),
                 };
             }
-            break :blk lib.def.Type{
-                .Union = lib.def.Type.Union{
+            break :blk cy.def.Type{
+                .Union = cy.def.Type.Union{
                     .fields = fields,
                 },
             };
@@ -285,30 +308,30 @@ fn createType(allocator: std.mem.Allocator, view: lib.chan.View(lib.def.Type)) s
         .Enum => blk: {
             const value = view.value(.Union);
             const fields_view = value.field(.fields);
-            const fields = try allocator.alloc(lib.def.Type.Enum.Field, fields_view.len());
+            const fields = try allocator.alloc(cy.def.Type.Enum.Field, fields_view.len());
             for (0..fields_view.len()) |i| {
                 const field = fields_view.elem(i);
-                fields[i] = lib.def.Type.Enum.Field{
+                fields[i] = cy.def.Type.Enum.Field{
                     .name = try allocator.dupe(u8, field.field(.name)),
                 };
             }
-            break :blk lib.def.Type{
-                .Enum = lib.def.Type.Enum{
+            break :blk cy.def.Type{
+                .Enum = cy.def.Type.Enum{
                     .fields = fields,
                 },
             };
         },
         .Ref => blk: {
             const value = view.value(.Ref);
-            break :blk lib.def.Type{
+            break :blk cy.def.Type{
                 .Ref = switch (value.tag()) {
-                    .Internal => lib.def.Type.Ref{
-                        .Internal = lib.def.Type.Ref.Internal{
+                    .Internal => cy.def.Type.Ref{
+                        .Internal = cy.def.Type.Ref.Internal{
                             .name = try allocator.dupe(u8, value.value(.Internal).field(.name)),
                         },
                     },
-                    .External => lib.def.Type.Ref{
-                        .External = lib.def.Type.Ref.External{
+                    .External => cy.def.Type.Ref{
+                        .External = cy.def.Type.Ref.External{
                             .scheme = try allocator.dupe(u8, value.value(.External).field(.scheme)),
                             .name = try allocator.dupe(u8, value.value(.External).field(.name)),
                         },
@@ -319,52 +342,52 @@ fn createType(allocator: std.mem.Allocator, view: lib.chan.View(lib.def.Type)) s
     };
 }
 
-fn allocType(allocator: std.mem.Allocator, view: lib.chan.View(lib.def.Type)) !*lib.def.Type {
-    const child = try allocator.create(lib.def.Type);
-    child.* = try createType(allocator, view);
+fn allocType(allocator: std.mem.Allocator, view: cy.chan.View(cy.def.Type)) !*cy.def.Type {
+    const child = try allocator.create(cy.def.Type);
+    child.* = try initType(allocator, view);
     return child;
 }
 
-fn destroyType(allocator: std.mem.Allocator, t: lib.def.Type) void {
+fn deinitType(allocator: std.mem.Allocator, t: cy.def.Type) void {
     switch (t) {
         // non-allocating
-        .Void, .Bool, .String, .Int, .Float => {},
+        .Void, .Bool, .String, .Int, .Float, .Any => {},
         .Optional => |info| {
-            destroyType(allocator, info.child.*);
+            deinitType(allocator, info.child.*);
             allocator.destroy(info.child);
         },
         .Array => |info| {
-            destroyType(allocator, info.child.*);
+            deinitType(allocator, info.child.*);
             allocator.destroy(info.child);
         },
         .List => |info| {
-            destroyType(allocator, info.child.*);
+            deinitType(allocator, info.child.*);
             allocator.destroy(info.child);
         },
         .Map => |info| {
-            destroyType(allocator, info.key.*);
+            deinitType(allocator, info.key.*);
             allocator.destroy(info.key);
 
-            destroyType(allocator, info.value.*);
+            deinitType(allocator, info.value.*);
             allocator.destroy(info.value);
         },
         .Struct => |info| {
             for (info.fields) |f| {
                 allocator.free(f.name);
-                destroyType(allocator, f.type);
+                deinitType(allocator, f.type);
             }
             allocator.free(info.fields);
         },
         .Tuple => |info| {
             for (info.fields) |f| {
-                destroyType(allocator, f);
+                deinitType(allocator, f.type);
             }
             allocator.free(info.fields);
         },
         .Union => |info| {
             for (info.fields) |f| {
                 allocator.free(f.name);
-                destroyType(allocator, f.type);
+                deinitType(allocator, f.type);
             }
             allocator.free(info.fields);
         },
@@ -388,40 +411,40 @@ fn destroyType(allocator: std.mem.Allocator, t: lib.def.Type) void {
     }
 }
 
-const TestScheme1 = lib.def.Scheme("scheme1", .{
-    lib.def.Object("ObjOne", .{
+const TestScheme1 = cy.def.Scheme("scheme1", .{
+    cy.def.Object("ObjOne", .{
         struct {
             f1: void,
             f2: bool,
-            f3: lib.def.String,
+            f3: cy.def.String,
             f4: u32,
             f5: f32,
             f6: ?f32,
-            f7: lib.def.Array(12, u32),
+            f7: [12]u32,
         },
         enum {
             f1,
             f2,
         },
     }),
-    lib.def.Object("ObjTwo", .{
+    cy.def.Object("ObjTwo", .{
         struct {
-            lib.def.List(bool),
-            lib.def.Map(lib.def.String, u32),
+            cy.def.List(bool),
+            cy.def.Map(cy.def.String, u32),
         },
         union(enum) {
-            f1: lib.def.This("ObjOne"),
-            f2: lib.def.This("ObjTwo"),
+            f1: cy.def.This("ObjOne"),
+            f2: cy.def.This("ObjTwo"),
         },
     }),
 });
 
-const TestScheme2 = lib.def.Scheme("scheme2", .{
-    lib.def.Object("ObjOne", .{
+const TestScheme2 = cy.def.Scheme("scheme2", .{
+    cy.def.Object("ObjOne", .{
         bool,
         struct {
             f1: bool,
-            f2: TestScheme1("ObjTwo"),
+            f2: TestScheme1.ref("ObjTwo"),
         },
     }),
 });
@@ -435,38 +458,38 @@ test {
     var out = std.ArrayList(u8).init(allocator);
     defer out.deinit();
 
-    try lib.chan.write(lib.def.ObjectScheme.from(TestScheme1(lib.def.This)), &out);
+    try cy.chan.write(cy.def.ObjectScheme.from(TestScheme1), &out);
 
     {
-        const view = lib.chan.read(lib.def.ObjectScheme, out.items);
+        const view = cy.chan.read(cy.def.ObjectScheme, out.items);
         const scheme_name = view.field(.name);
         const scheme_objects = view.field(.objects);
 
         const obj_one = scheme_objects.elem(0);
 
         var index = try table.update(scheme_name, obj_one.field(.name), obj_one.field(.versions).elem(0));
-        try std.testing.expectEqualDeep(lib.def.TypeId{
+        try std.testing.expectEqualDeep(cy.def.TypeId{
             .scheme = 0,
             .name = 0,
             .version = 0,
         }, index);
 
         index = try table.update(scheme_name, obj_one.field(.name), obj_one.field(.versions).elem(1));
-        try std.testing.expectEqualDeep(lib.def.TypeId{
+        try std.testing.expectEqualDeep(cy.def.TypeId{
             .scheme = 0,
             .name = 0,
             .version = 1,
         }, index);
 
         index = try table.update(scheme_name, obj_one.field(.name), obj_one.field(.versions).elem(0));
-        try std.testing.expectEqualDeep(lib.def.TypeId{
+        try std.testing.expectEqualDeep(cy.def.TypeId{
             .scheme = 0,
             .name = 0,
             .version = 0,
         }, index);
 
         index = try table.update(scheme_name, obj_one.field(.name), obj_one.field(.versions).elem(1));
-        try std.testing.expectEqualDeep(lib.def.TypeId{
+        try std.testing.expectEqualDeep(cy.def.TypeId{
             .scheme = 0,
             .name = 0,
             .version = 1,
@@ -475,28 +498,28 @@ test {
         const obj_two = scheme_objects.elem(1);
 
         index = try table.update(scheme_name, obj_two.field(.name), obj_two.field(.versions).elem(0));
-        try std.testing.expectEqualDeep(lib.def.TypeId{
+        try std.testing.expectEqualDeep(cy.def.TypeId{
             .scheme = 0,
             .name = 1,
             .version = 0,
         }, index);
 
         index = try table.update(scheme_name, obj_two.field(.name), obj_two.field(.versions).elem(1));
-        try std.testing.expectEqualDeep(lib.def.TypeId{
+        try std.testing.expectEqualDeep(cy.def.TypeId{
             .scheme = 0,
             .name = 1,
             .version = 1,
         }, index);
 
         index = try table.update(scheme_name, obj_two.field(.name), obj_two.field(.versions).elem(0));
-        try std.testing.expectEqualDeep(lib.def.TypeId{
+        try std.testing.expectEqualDeep(cy.def.TypeId{
             .scheme = 0,
             .name = 1,
             .version = 0,
         }, index);
 
         index = try table.update(scheme_name, obj_two.field(.name), obj_two.field(.versions).elem(1));
-        try std.testing.expectEqualDeep(lib.def.TypeId{
+        try std.testing.expectEqualDeep(cy.def.TypeId{
             .scheme = 0,
             .name = 1,
             .version = 1,
@@ -504,38 +527,38 @@ test {
     }
 
     out.clearRetainingCapacity();
-    try lib.chan.write(lib.def.ObjectScheme.from(TestScheme2(lib.def.This)), &out);
+    try cy.chan.write(cy.def.ObjectScheme.from(TestScheme2), &out);
 
     {
-        const view = lib.chan.read(lib.def.ObjectScheme, out.items);
+        const view = cy.chan.read(cy.def.ObjectScheme, out.items);
         const scheme_name = view.field(.name);
         const scheme_objects = view.field(.objects);
 
         const obj_one = scheme_objects.elem(0);
 
         var index = try table.update(scheme_name, obj_one.field(.name), obj_one.field(.versions).elem(0));
-        try std.testing.expectEqualDeep(lib.def.TypeId{
+        try std.testing.expectEqualDeep(cy.def.TypeId{
             .scheme = 1,
             .name = 0,
             .version = 0,
         }, index);
 
         index = try table.update(scheme_name, obj_one.field(.name), obj_one.field(.versions).elem(1));
-        try std.testing.expectEqualDeep(lib.def.TypeId{
+        try std.testing.expectEqualDeep(cy.def.TypeId{
             .scheme = 1,
             .name = 0,
             .version = 1,
         }, index);
 
         index = try table.update(scheme_name, obj_one.field(.name), obj_one.field(.versions).elem(0));
-        try std.testing.expectEqualDeep(lib.def.TypeId{
+        try std.testing.expectEqualDeep(cy.def.TypeId{
             .scheme = 1,
             .name = 0,
             .version = 0,
         }, index);
 
         index = try table.update(scheme_name, obj_one.field(.name), obj_one.field(.versions).elem(1));
-        try std.testing.expectEqualDeep(lib.def.TypeId{
+        try std.testing.expectEqualDeep(cy.def.TypeId{
             .scheme = 1,
             .name = 0,
             .version = 1,

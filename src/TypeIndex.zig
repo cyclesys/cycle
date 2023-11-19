@@ -1,5 +1,5 @@
 const std = @import("std");
-const lib = @import("lib");
+const cy = @import("cycle");
 const TypeTable = @import("TypeTable.zig");
 
 editor_to_plugin: std.AutoHashMap(u64, u64),
@@ -7,7 +7,7 @@ plugin_to_editor: std.AutoHashMap(u64, u64),
 
 const Self = @This();
 
-pub fn init(allocator: std.mem.Allocator, table: *TypeTable, view: lib.chan.View([]const lib.def.ObjectScheme)) !Self {
+pub fn init(allocator: std.mem.Allocator, table: *TypeTable, view: cy.chan.View([]const cy.def.ObjectScheme)) !Self {
     var editor_to_plugin = std.AutoHashMap(u64, u64).init(allocator);
     var plugin_to_editor = std.AutoHashMap(u64, u64).init(allocator);
 
@@ -23,7 +23,7 @@ pub fn init(allocator: std.mem.Allocator, table: *TypeTable, view: lib.chan.View
                 const version = object_versions.elem(vi);
 
                 const editor_id = try table.update(scheme.field(.name), object.field(.name), version);
-                const plugin_id = lib.def.TypeId{
+                const plugin_id = cy.def.TypeId{
                     .scheme = @intCast(si),
                     .name = @intCast(oi),
                     .version = @intCast(vi),
@@ -41,11 +41,11 @@ pub fn init(allocator: std.mem.Allocator, table: *TypeTable, view: lib.chan.View
     };
 }
 
-pub fn pluginId(self: *const Self, editor_id: lib.def.TypeId) lib.def.TypeId {
+pub fn pluginId(self: *const Self, editor_id: cy.def.TypeId) cy.def.TypeId {
     return @bitCast(self.editor_to_plugin.get(@bitCast(editor_id)).?);
 }
 
-pub fn editorId(self: *const Self, plugin_id: lib.def.TypeId) lib.def.TypeId {
+pub fn editorId(self: *const Self, plugin_id: cy.def.TypeId) cy.def.TypeId {
     return @bitCast(self.plugin_to_editor.get(@bitCast(plugin_id)).?);
 }
 
@@ -65,51 +65,51 @@ test {
     defer table.deinit();
 
     {
-        const schemes: []const lib.def.ObjectScheme = &.{
-            lib.def.ObjectScheme.from(lib.def.Scheme("scheme1", .{
-                lib.def.Object("Obj1", .{ u8, bool }),
-                lib.def.Object("Obj2", .{ u8, bool }),
-            })(lib.def.This)),
-            lib.def.ObjectScheme.from(lib.def.Scheme("scheme2", .{
-                lib.def.Object("Obj1", .{ u8, bool }),
-                lib.def.Object("Obj2", .{ u8, bool }),
-            })(lib.def.This)),
+        const schemes: []const cy.def.ObjectScheme = &.{
+            cy.def.ObjectScheme.from(cy.def.Scheme("scheme1", .{
+                cy.def.Object("Obj1", .{ u8, bool }),
+                cy.def.Object("Obj2", .{ u8, bool }),
+            })),
+            cy.def.ObjectScheme.from(cy.def.Scheme("scheme2", .{
+                cy.def.Object("Obj1", .{ u8, bool }),
+                cy.def.Object("Obj2", .{ u8, bool }),
+            })),
         };
-        try lib.chan.write(schemes, &buf);
+        try cy.chan.write(schemes, &buf);
 
-        var index = try Self.init(allocator, &table, lib.chan.read([]const lib.def.ObjectScheme, buf.items));
+        var index = try Self.init(allocator, &table, cy.chan.read([]const cy.def.ObjectScheme, buf.items));
         defer index.deinit();
 
         // the plugin type ids should match the editor type ids
-        var expected = lib.def.TypeId{ .scheme = 0, .name = 0, .version = 0 };
+        var expected = cy.def.TypeId{ .scheme = 0, .name = 0, .version = 0 };
         try std.testing.expectEqualDeep(expected, index.pluginId(expected));
         try std.testing.expectEqualDeep(expected, index.editorId(expected));
 
-        expected = lib.def.TypeId{ .scheme = 0, .name = 0, .version = 1 };
+        expected = cy.def.TypeId{ .scheme = 0, .name = 0, .version = 1 };
         try std.testing.expectEqualDeep(expected, index.pluginId(expected));
         try std.testing.expectEqualDeep(expected, index.editorId(expected));
 
-        expected = lib.def.TypeId{ .scheme = 0, .name = 1, .version = 0 };
+        expected = cy.def.TypeId{ .scheme = 0, .name = 1, .version = 0 };
         try std.testing.expectEqualDeep(expected, index.pluginId(expected));
         try std.testing.expectEqualDeep(expected, index.editorId(expected));
 
-        expected = lib.def.TypeId{ .scheme = 0, .name = 1, .version = 1 };
+        expected = cy.def.TypeId{ .scheme = 0, .name = 1, .version = 1 };
         try std.testing.expectEqualDeep(expected, index.pluginId(expected));
         try std.testing.expectEqualDeep(expected, index.editorId(expected));
 
-        expected = lib.def.TypeId{ .scheme = 1, .name = 0, .version = 0 };
+        expected = cy.def.TypeId{ .scheme = 1, .name = 0, .version = 0 };
         try std.testing.expectEqualDeep(expected, index.pluginId(expected));
         try std.testing.expectEqualDeep(expected, index.editorId(expected));
 
-        expected = lib.def.TypeId{ .scheme = 1, .name = 0, .version = 1 };
+        expected = cy.def.TypeId{ .scheme = 1, .name = 0, .version = 1 };
         try std.testing.expectEqualDeep(expected, index.pluginId(expected));
         try std.testing.expectEqualDeep(expected, index.editorId(expected));
 
-        expected = lib.def.TypeId{ .scheme = 1, .name = 1, .version = 0 };
+        expected = cy.def.TypeId{ .scheme = 1, .name = 1, .version = 0 };
         try std.testing.expectEqualDeep(expected, index.pluginId(expected));
         try std.testing.expectEqualDeep(expected, index.editorId(expected));
 
-        expected = lib.def.TypeId{ .scheme = 1, .name = 1, .version = 1 };
+        expected = cy.def.TypeId{ .scheme = 1, .name = 1, .version = 1 };
         try std.testing.expectEqualDeep(expected, index.pluginId(expected));
         try std.testing.expectEqualDeep(expected, index.editorId(expected));
     }
@@ -117,19 +117,19 @@ test {
     buf.clearRetainingCapacity();
 
     {
-        const schemes: []const lib.def.ObjectScheme = &.{
-            lib.def.ObjectScheme.from(lib.def.Scheme("scheme2", .{
-                lib.def.Object("Obj2", .{ bool, u8 }),
-                lib.def.Object("Obj1", .{ bool, u8 }),
-            })(lib.def.This)),
-            lib.def.ObjectScheme.from(lib.def.Scheme("scheme1", .{
-                lib.def.Object("Obj2", .{ bool, u8 }),
-                lib.def.Object("Obj1", .{ bool, u8 }),
-            })(lib.def.This)),
+        const schemes: []const cy.def.ObjectScheme = &.{
+            cy.def.ObjectScheme.from(cy.def.Scheme("scheme2", .{
+                cy.def.Object("Obj2", .{ bool, u8 }),
+                cy.def.Object("Obj1", .{ bool, u8 }),
+            })),
+            cy.def.ObjectScheme.from(cy.def.Scheme("scheme1", .{
+                cy.def.Object("Obj2", .{ bool, u8 }),
+                cy.def.Object("Obj1", .{ bool, u8 }),
+            })),
         };
-        try lib.chan.write(schemes, &buf);
+        try cy.chan.write(schemes, &buf);
 
-        var index = try Self.init(allocator, &table, lib.chan.read([]const lib.def.ObjectScheme, buf.items));
+        var index = try Self.init(allocator, &table, cy.chan.read([]const cy.def.ObjectScheme, buf.items));
         defer index.deinit();
 
         try expectOppositeTypeIds(index, true, true, true);
@@ -148,24 +148,24 @@ test {
 
 fn expectOppositeTypeIds(index: Self, scheme: bool, name: bool, version: bool) !void {
     try std.testing.expectEqualDeep(
-        lib.def.TypeId{
+        cy.def.TypeId{
             .scheme = @intFromBool(scheme),
             .name = @intFromBool(name),
             .version = @intFromBool(version),
         },
-        index.pluginId(lib.def.TypeId{
+        index.pluginId(cy.def.TypeId{
             .scheme = @intFromBool(!scheme),
             .name = @intFromBool(!name),
             .version = @intFromBool(!version),
         }),
     );
     try std.testing.expectEqualDeep(
-        lib.def.TypeId{
+        cy.def.TypeId{
             .scheme = @intFromBool(!scheme),
             .name = @intFromBool(!name),
             .version = @intFromBool(!version),
         },
-        index.editorId(lib.def.TypeId{
+        index.editorId(cy.def.TypeId{
             .scheme = @intFromBool(scheme),
             .name = @intFromBool(name),
             .version = @intFromBool(version),
