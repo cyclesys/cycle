@@ -5,7 +5,6 @@ const Plugin = @import("Plugin.zig");
 allocator: std.mem.Allocator,
 dir_path: []const u8,
 plugins: []Plugin,
-mutex: std.Thread.Mutex,
 
 const PluginDir = @This();
 
@@ -13,9 +12,9 @@ pub fn init(allocator: std.mem.Allocator) !PluginDir {
     const home_dir_path = (try kf.getPath(allocator, .home)).?;
     defer allocator.free(home_dir_path);
 
-    const dir_path = try std.fs.path.join(allocator, &.{ home_dir_path, ".cycle" });
+    const dir_path = try std.fs.path.join(allocator, &.{ home_dir_path, ".cycle", "run" });
 
-    var dir = try std.fs.openIterableDirAbsolute(home_dir_path, .{});
+    var dir = try std.fs.openIterableDirAbsolute(dir_path, .{});
     defer dir.close();
 
     var dir_iter = dir.iterate();
@@ -23,7 +22,7 @@ pub fn init(allocator: std.mem.Allocator) !PluginDir {
     var plugins = std.ArrayList(Plugin).init(allocator);
     while (try dir_iter.next()) |entry| {
         if (entry.kind != .file) continue;
-        const exe_path = try std.fs.path.join(allocator, &.{ home_dir_path, entry.name });
+        const exe_path = try std.fs.path.join(allocator, &.{ dir_path, entry.name });
 
         try plugins.append(Plugin{
             .allocator = allocator,

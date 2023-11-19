@@ -1,5 +1,5 @@
 const std = @import("std");
-const lib = @import("lib");
+const cy = @import("cycle");
 const win = @import("windows.zig");
 const LibVersion = @import("LibVersion.zig");
 const TypeIndex = @import("TypeIndex.zig");
@@ -8,7 +8,7 @@ const TypeTable = @import("TypeTable.zig");
 allocator: std.mem.Allocator,
 exe_path: []const u8,
 generation: u32 = 0,
-instance: ?*Instance,
+instance: ?*Instance = null,
 
 pub const Error = error{
     PluginError,
@@ -57,20 +57,20 @@ pub const Ref = struct {
 
 const Plugin = @This();
 
-pub const InitChannel = Channel(lib.init.SystemMessage, lib.init.PluginMessage);
+pub const InitChannel = Channel(cy.init_mod.PluginMessage, cy.init_mod.SystemMessage);
 
 fn Channel(comptime Read: type, comptime Write: type) type {
     return struct {
         reader: Reader,
         writer: Writer,
 
-        const Reader = lib.channel.Reader(Read);
-        const Writer = lib.channel.Writer(Write);
+        const Reader = cy.chan.Reader(Read);
+        const Writer = cy.chan.Writer(Write);
         const Self = @This();
 
         pub fn init(allocator: std.mem.Allocator) !Self {
-            const read = try lib.channel.Channel.init(false);
-            const write = try lib.channel.Channel.init(true);
+            const read = try cy.chan.Channel.init(false);
+            const write = try cy.chan.Channel.init(true);
             return .{
                 .reader = Reader.init(allocator, read),
                 .writer = Writer.init(allocator, write),
@@ -125,6 +125,9 @@ pub fn run(self: *Plugin, table: *TypeTable) !void {
     const command_line = try std.unicode.utf8ToUtf16LeWithNull(self.allocator, command_line_bytes.items);
     defer self.allocator.free(command_line);
 
+    const instance = try self.allocator.create(Instance);
+    errdefer self.allocator.destroy(instance);
+
     var startup_info = std.mem.zeroInit(win.STARTUPINFOW, .{});
     var proc_info: win.PROCESS_INFORMATION = undefined;
     try win.CreateProcessW(
@@ -132,23 +135,21 @@ pub fn run(self: *Plugin, table: *TypeTable) !void {
         command_line,
         null,
         null,
-        true,
+        win.TRUE,
         0,
         null,
         null,
         &startup_info,
         &proc_info,
     );
-    self.proc_info = proc_info;
+    instance.proc_info = proc_info;
 
-    const instance = try self.allocator.create(Instance);
-    var initialized = .{
-        .version = false,
-        .index = false,
-        .ui = false,
-    };
+    var initialized: struct {
+        version: bool = false,
+        index: bool = false,
+    } = .{};
+
     errdefer {
-        self.proc_info = null;
         win.TerminateProcess(proc_info.hProcess, 1) catch |e| {
             std.log.err("error terminating plugin process: {}", .{e});
         };
@@ -173,32 +174,23 @@ pub fn run(self: *Plugin, table: *TypeTable) !void {
                     }
 
                     instance.version = Version{
-                        .major = ver.major,
-                        .minor = ver.minor,
+                        .major = ver.field(.major),
+                        .minor = ver.field(.minor),
                     };
                     initialized.version = true;
                 },
                 .SetIndex => {
                     const schemes = msg.value(.SetIndex);
-                    if (!initialized.version or initialized.index_scheme) {
+                    if (!initialized.version or initialized.index) {
                         return error.PluginError;
                     }
 
                     instance.index = try TypeIndex.init(self.allocator, table, schemes);
                     initialized.index = true;
                 },
-                .SetUI => {
-                    // TODO: implement
-                    if (initialized.ui) {
-                        return error.PluginError;
-                    }
-
-                    initialized.ui = true;
-                },
                 .Finalize => {
                     break;
                 },
-                else => return error.PluginError,
             }
         } else {
             return error.PluginUnresponsive;
@@ -208,4 +200,6 @@ pub fn run(self: *Plugin, table: *TypeTable) !void {
     if (!initialized.version or !initialized.index) {
         return error.PluginError;
     }
+
+    self.instance = instance;
 }
