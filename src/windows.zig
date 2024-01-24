@@ -1,5 +1,10 @@
 const windows = @import("std").os.windows;
 
-pub usingnamespace windows;
-pub usingnamespace windows.user32;
-pub usingnamespace windows.kernel32;
+pub const TRUE = windows.TRUE;
+pub const FALSE = windows.FALSE;
+
+pub const PROCESS_INFORMATION = windows.PROCESS_INFORMATION;
+pub const STARTUPINFOW = windows.STARTUPINFOW;
+
+pub const CreateProcessW = windows.CreateProcessW;
+pub const TerminateProcess = windows.TerminateProcess;

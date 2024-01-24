@@ -171,6 +171,20 @@ fn selectPhysicalDevice(
                 continue;
         }
 
+        {
+            var indexing_features = vk.PhysicalDeviceDescriptorIndexingFeatures{};
+            var device_features = vk.PhysicalDeviceFeatures2{
+                .p_next = @ptrCast(&indexing_features),
+                .features = vk.PhysicalDeviceFeatures{},
+            };
+            instance_fns.getPhysicalDeviceFeatures2(device, &device_features);
+            if (indexing_features.shader_sampled_image_array_non_uniform_indexing == vk.FALSE or
+                indexing_features.descriptor_binding_sampled_image_update_after_bind == vk.FALSE)
+            {
+                continue;
+            }
+        }
+
         var queue_family_count: u32 = 0;
         _ = try instance_fns.getPhysicalDeviceQueueFamilyProperties(device, &queue_family_count, null);
 
@@ -219,7 +233,7 @@ fn selectPhysicalDevice(
         }
     }
 
-    return error.VulkanDeviceNotFound;
+    return error.NoSuitableDeviceFound;
 }
 
 fn createDevice(
@@ -241,9 +255,15 @@ fn createDevice(
             .p_queue_priorites = &priorities,
         },
     };
+    var indexing_features = vk.PhysicalDeviceDescriptorIndexingFeatures{};
+    var device_features = vk.PhysicalDeviceFeatures2{
+        .p_next = @ptrCast(&indexing_features),
+        .features = vk.PhysicalDeviceFeatures{},
+    };
     return try instance_fns.createDevice(
         physical_device,
         &vk.DeviceCreateInfo{
+            .p_next = @ptrCast(&device_features),
             .queue_create_info_count = queue_create_infos.len,
             .p_queue_create_infos = &queue_create_infos,
         },

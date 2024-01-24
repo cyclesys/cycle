@@ -45,7 +45,7 @@ pub fn update(
     object_name: []const u8,
     type_table: *const TypeTable,
     bytes: []const u8,
-) !void {
+) !bool {
     const scheme_gop = try self.schemes.getOrPut(scheme_name);
     if (!scheme_gop.found_existing) {
         scheme_gop.key_ptr.* = try self.allocator.dupe(u8, scheme_name);
@@ -63,14 +63,12 @@ pub fn update(
     const object_gop = try objects.getOrPut(object_name);
     if (!object_gop.found_existing) {
         object_gop.key_ptr.* = try self.allocator.dupe(u8, object_name);
-        object_gop.value_ptr.* = Object{};
+        object_gop.value_ptr.* = try Object.init(self.allocator);
     }
 
-    try Object.update(object_gop.value_ptr, self.allocator, type_table, bytes);
+    try Object.update(object_gop.value_ptr, self.allocator, bytes);
 }
 
-pub fn remove(
-    self: *Self,
-) !void {
+pub fn remove(self: *Self) !void {
     _ = self;
 }

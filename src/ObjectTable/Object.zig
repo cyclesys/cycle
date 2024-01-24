@@ -240,9 +240,9 @@ fn deinitState(allocator: std.mem.Allocator, t: cy.def.Type, state: State) void 
     }
 }
 
-pub fn update(self: *Self, bytes: []const u8) !bool {
+pub fn update(self: *Self, allocator: std.mem.Allocator, bytes: []const u8) !bool {
     if (updateIsValid(self.type, self.state, bytes)) {
-        try updateState(self.allocator, self.type, &self.state, bytes);
+        try updateState(allocator, self.type, &self.state, bytes);
         return true;
     }
     return false;
