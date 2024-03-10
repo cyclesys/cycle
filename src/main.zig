@@ -1,26 +1,22 @@
 const std = @import("std");
 const glfw = @import("glfw");
-const PluginDir = @import("PluginDir.zig");
-const TypeTable = @import("TypeTable.zig");
 
 pub fn main() !void {
-    const allocator = std.heap.c_allocator;
+    var ctx = Context{};
+    const window = try initGlfw(&ctx);
+    defer window.destroy();
+    defer glfw.terminate();
 
-    var state = State{
-        .type_table = TypeTable.init(allocator),
-        .plugin_dir = try PluginDir.init(allocator),
-    };
-
-    // run all plugins immediately
-    for (state.plugin_dir.plugins) |*plugin| {
-        try plugin.run(&state.type_table);
+    while (!window.shouldClose()) {
+        glfw.pollEvents();
     }
+}
 
+fn initGlfw(ctx: *Context) !glfw.Window {
     glfw.setErrorCallback(errorCallback);
     if (!glfw.init(.{})) {
         return error.GlfwInit;
     }
-    defer glfw.terminate();
 
     const monitor = glfw.Monitor.getPrimary() orelse {
         return error.GlfwMonitorGetPrimary;
@@ -39,76 +35,65 @@ pub fn main() !void {
     ) orelse {
         return error.GlfwWindowCreate;
     };
-    defer window.destroy();
 
-    window.setUserPointer(&state);
-    window.setFrameBufferSizeCallback(framebufferSizeCallback);
-    window.setKeyCallback(keyCallback);
-    window.setCharCallback(charCallback);
-    window.setMouseButtonCallback(mouseButtonCallback);
-    window.setCursorPosCallback(cursorPosCallback);
-    window.setCursorEnterCallback(cursorEnterCallback);
-    window.setScrollCallback(scrollCallback);
+    window.setUserPointer(@ptrCast(ctx));
+    window.setFramebufferSizeCallback(Context.onFramebufferSize);
+    window.setKeyCallback(Context.onKey);
+    window.setCharCallback(Context.onChar);
+    window.setMouseButtonCallback(Context.onMouseButton);
+    window.setCursorPosCallback(Context.onCursorPos);
+    window.setCursorEnterCallback(Context.onCursorEnter);
+    window.setScrollCallback(Context.onScroll);
     window.show();
 
-    while (!window.shouldClose()) {
-        glfw.pollEvents();
+    return window;
+}
+
+const Context = struct {
+    fn onFramebufferSize(w: glfw.Window, width: u32, height: u32) void {
+        _ = w;
+        _ = height;
+        _ = width;
     }
-}
 
-const State = struct {
-    type_table: TypeTable,
-    plugin_dir: PluginDir,
+    fn onKey(w: glfw.Window, key: glfw.Key, scancode: i32, action: glfw.Action, mods: glfw.Mods) void {
+        _ = w;
+        _ = mods;
+        _ = action;
+        _ = scancode;
+        _ = key;
+    }
+
+    fn onChar(window: glfw.Window, codepoint: u32) void {
+        _ = window;
+        _ = codepoint;
+    }
+
+    fn onMouseButton(window: glfw.Window, button: glfw.MouseButton, action: glfw.Action, mods: glfw.Mods) void {
+        _ = window;
+        _ = button;
+        _ = action;
+        _ = mods;
+    }
+
+    fn onCursorPos(window: glfw.Window, xpos: f64, ypos: f64) void {
+        _ = window;
+        _ = xpos;
+        _ = ypos;
+    }
+
+    fn onCursorEnter(window: glfw.Window, entered: bool) void {
+        _ = window;
+        _ = entered;
+    }
+
+    fn onScroll(window: glfw.Window, xoffset: f64, yoffset: f64) void {
+        _ = window;
+        _ = xoffset;
+        _ = yoffset;
+    }
 };
-
-fn framebufferSizeCallback(window: glfw.Window, width: u32, height: u32) void {
-    _ = window;
-    _ = width;
-    _ = height;
-}
-
-fn keyCallback(window: glfw.Window, key: glfw.Key, scancode: i32, action: glfw.Action, mods: glfw.Mods) void {
-    _ = window;
-    _ = key;
-    _ = scancode;
-    _ = action;
-    _ = mods;
-}
-
-fn charCallback(window: glfw.Window, codepoint: u32) void {
-    _ = window;
-    _ = codepoint;
-}
-
-fn mouseButtonCallback(window: glfw.Window, button: glfw.MouseButton, action: glfw.Action, mods: glfw.Mods) void {
-    _ = window;
-    _ = button;
-    _ = action;
-    _ = mods;
-}
-
-fn cursorPosCallback(window: glfw.Window, xpos: f64, ypos: f64) void {
-    _ = window;
-    _ = xpos;
-    _ = ypos;
-}
-
-fn cursorEnterCallback(window: glfw.Window, entered: bool) void {
-    _ = window;
-    _ = entered;
-}
-
-fn scrollCallback(window: glfw.Window, xoffset: f64, yoffset: f64) void {
-    _ = window;
-    _ = xoffset;
-    _ = yoffset;
-}
 
 fn errorCallback(error_code: glfw.ErrorCode, description: [:0]const u8) void {
     std.log.err("glfw {}: {s}\n", .{ error_code, description });
-}
-
-test {
-    _ = @import("TypeIndex.zig");
-    _ = @import("TypeTable.zig");
 }

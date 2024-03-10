@@ -12,19 +12,14 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
     });
 
-    const lib_dep = b.dependency("cycle", .{});
-    exe.addModule("cycle", lib_dep.module("cycle"));
-    @import("cycle").link(lib_dep.builder, exe);
+    const known_folders_dep = b.dependency("known_folders", .{});
+    exe.root_module.addImport("known_folders", known_folders_dep.module("known-folders"));
 
     const glfw_dep = b.dependency("mach_glfw", .{});
-    exe.addModule("glfw", glfw_dep.module("mach-glfw"));
-    @import("mach_glfw").link(glfw_dep.builder, exe);
+    exe.root_module.addImport("glfw", glfw_dep.module("mach-glfw"));
 
-    exe.addModule("vulkan", try vulkanModule(b));
-    exe.addModule("shaders", shadersModule(b));
-
-    const known_folders_dep = b.dependency("known_folders", .{});
-    exe.addModule("known_folders", known_folders_dep.module("known-folders"));
+    exe.root_module.addImport("vulkan", try vulkanModule(b));
+    exe.root_module.addImport("shaders", shadersModule(b));
 
     exe.linkLibC();
     b.installArtifact(exe);
@@ -44,7 +39,6 @@ pub fn build(b: *std.Build) !void {
         .target = target,
         .optimize = optimize,
     });
-    main_tests.addModule("cycle", lib_dep.module("cycle"));
 
     const run_main_tests = b.addRunArtifact(main_tests);
     const main_tests_step = b.step("test", "Run main tests");
@@ -86,7 +80,7 @@ fn ensureCachedFile(allocator: std.mem.Allocator, cache_root: []const u8, name: 
     const file = std.fs.openFileAbsolute(path, .{}) catch |e| {
         switch (e) {
             error.FileNotFound => {
-                const result = try std.ChildProcess.exec(.{
+                const result = try std.ChildProcess.run(.{
                     .allocator = allocator,
                     .argv = &.{ "curl", url, "-o", path },
                 });
