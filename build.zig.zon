@@ -8,17 +8,9 @@
         "LICENSE",
     },
     .dependencies = .{
-        .known_folders = .{
-            .url = "https://github.com/ziglibs/known-folders/archive/806ba01b872820004c7dec3117cb0db66b206af6.tar.gz",
-            .hash = "122094b48dea08e241b48d0ec32e3df6965e814091e3cabaff942e62d053f3ff9b5f",
-        },
         .mach_glfw = .{
-            .url = "https://pkg.machengine.org/mach-glfw/63da35e57c3695a787b927e69e4140eb74ffc234.tar.gz",
-            .hash = "1220fda87b59df6353864651cdd3943f1159d8d517a45cd67bed493fe6c0a0c78c17",
-        },
-        .vulkan_zig = .{
-            .url = "https://github.com/Snektron/vulkan-zig/archive/62e981ad4e5a5afdbd5051d10d2e8a211840fd2e.tar.gz",
-            .hash = "1220cac0f5c2006252f1cf6c1ce8b88bfb136238dc48dd511635bb63dc66e119e02a",
+            .url = "https://github.com/hexops/mach-glfw/archive/1a9a03399058fd83f7fbb597f3f8304007ff6a3c.tar.gz",
+            .hash = "1220b4d58ec6cf53abfd8d7547d39afb9bffa41822d4d58f52625230466e51cc93bb",
         },
     },
 }
