@@ -10,11 +10,28 @@ pub fn build(b: *std.Build) !void {
         .target = target,
         .optimize = optimize,
     });
+    exe.addIncludePath(.{ .path = "src/" });
+    exe.addCSourceFiles(.{
+        .files = &.{
+            "src/render/render.cc",
+        },
+        .flags = &.{
+            "-std=c++17",
+            "-O3",
+            "-Wall",
+            "-Wextra",
+        },
+    });
+
     exe.root_module.addImport("glfw", b.dependency("mach_glfw", .{
         .target = target,
         .optimize = optimize,
     }).module("mach-glfw"));
+
     exe.linkLibC();
+    exe.linkLibCpp();
+    exe.linkSystemLibrary("d2d1");
+
     b.installArtifact(exe);
 
     const run_cmd = b.addRunArtifact(exe);

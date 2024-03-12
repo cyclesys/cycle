@@ -1,16 +1,26 @@
 const std = @import("std");
 const glfw = @import("glfw");
+const render = @cImport({
+    @cInclude("render/render.h");
+});
 
 pub fn main() !void {
     var ctx = Context{};
     const window = try initGlfw(&ctx);
-    defer window.destroy();
     defer glfw.terminate();
+    defer window.destroy();
 
+    const hwnd = GlfwNative.getWin32Window(window);
+    const render_context = render.createRenderContext(@alignCast(@ptrCast(hwnd)));
+    defer render.destroyRenderContext(render_context);
+
+    window.show();
     while (!window.shouldClose()) {
         glfw.pollEvents();
     }
 }
+
+const GlfwNative = glfw.Native(.{ .win32 = true });
 
 fn initGlfw(ctx: *Context) !glfw.Window {
     glfw.setErrorCallback(errorCallback);
@@ -44,7 +54,6 @@ fn initGlfw(ctx: *Context) !glfw.Window {
     window.setCursorPosCallback(Context.onCursorPos);
     window.setCursorEnterCallback(Context.onCursorEnter);
     window.setScrollCallback(Context.onScroll);
-    window.show();
 
     return window;
 }
@@ -64,7 +73,7 @@ const Context = struct {
         _ = key;
     }
 
-    fn onChar(window: glfw.Window, codepoint: u32) void {
+    fn onChar(window: glfw.Window, codepoint: u21) void {
         _ = window;
         _ = codepoint;
     }
