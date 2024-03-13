@@ -13,10 +13,10 @@ typedef uint8_t u8;
 typedef uintptr_t usize;
 typedef float f32;
 
-struct Slice {
-    void* ptr;
-    usize len;
-};
+typedef struct ConstSlice {
+    const void* ptr;
+    const usize len;
+} ConstSlice;
 
 #ifdef __cplusplus
 }

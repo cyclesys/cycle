@@ -15,17 +15,20 @@
 extern "C" {
 #endif
 
-struct RenderContext {
+struct Context {
     ID2D1Factory* factory;
-    ID2D1HwndRenderTarget* target;
     IDWriteFactory* text_factory;
 };
 
-struct RenderTarget {
-    ID2D1BitmapRenderTarget* bitmap;
+struct Window {
+    ID2D1HwndRenderTarget* target;
 };
 
-struct RenderText {
+struct Object {
+    ID2D1BitmapRenderTarget* target;
+};
+
+struct Text {
     wchar_t* chars;
     usize chars_len;
     IDWriteTextFormat* format;
@@ -34,11 +37,15 @@ struct RenderText {
 
 D2D1_COLOR_F colorToD2D(Color color);
 
+D2D1_POINT_2F offsetToD2D(Offset offset);
+
+D2D1_SIZE_F sizeToD2D(Size size);
+
 D2D1_RECT_F rectToD2D(Rect r);
 
 D2D1_ROUNDED_RECT rrectToD2D(RRect rr);
 
-ID2D1SolidColorBrush* createFillBrush(RenderTarget* target, Color color);
+ID2D1SolidColorBrush* createFillBrush(Object* obj, Color color);
 
 #ifdef __cplusplus
 }

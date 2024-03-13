@@ -13,7 +13,11 @@ pub fn build(b: *std.Build) !void {
     exe.addIncludePath(.{ .path = "src/" });
     exe.addCSourceFiles(.{
         .files = &.{
-            "src/render/render.cc",
+            "src/render/context.cc",
+            "src/render/internal.cc",
+            "src/render/object.cc",
+            "src/render/text.cc",
+            "src/render/window.cc",
         },
         .flags = &.{
             "-std=c++17",
@@ -22,15 +26,15 @@ pub fn build(b: *std.Build) !void {
             "-Wextra",
         },
     });
+    exe.linkLibC();
+    exe.linkLibCpp();
+    exe.linkSystemLibrary("d2d1");
+    exe.linkSystemLibrary("dwrite");
 
     exe.root_module.addImport("glfw", b.dependency("mach_glfw", .{
         .target = target,
         .optimize = optimize,
     }).module("mach-glfw"));
-
-    exe.linkLibC();
-    exe.linkLibCpp();
-    exe.linkSystemLibrary("d2d1");
 
     b.installArtifact(exe);
 

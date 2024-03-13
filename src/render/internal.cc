@@ -18,6 +18,20 @@ D2D1_COLOR_F colorToD2D(Color color) {
     return color_f;
 }
 
+D2D1_POINT_2F offsetToD2D(Offset offset) {
+    D2D1_POINT_2F point_2f;
+    point_2f.x = offset.dx;
+    point_2f.y = offset.dy;
+    return point_2f;
+}
+
+D2D1_SIZE_F sizeToD2D(Size size) {
+    D2D1_SIZE_F size_f;
+    size_f.width = size.width;
+    size_f.height = size.height;
+    return size_f;
+}
+
 D2D1_RECT_F rectToD2D(Rect r) {
     D2D1_RECT_F rect;
     rect.left = r.offset.dx;
@@ -33,4 +47,19 @@ D2D1_ROUNDED_RECT rrectToD2D(RRect rr) {
     rrect.radiusX = rr.rx;
     rrect.radiusY = rr.ry;
     return rrect;
+}
+
+ID2D1SolidColorBrush* createFillBrush(Object* obj, Color color) {
+    D2D1_COLOR_F brush_color = colorToD2D(color);
+
+    D2D1_BRUSH_PROPERTIES brush_properties;
+    brush_properties.opacity = 1.0;
+
+    ID2D1SolidColorBrush* brush;
+    obj->target->CreateSolidColorBrush(
+        &brush_color,
+        &brush_properties,
+        &brush
+    );
+    return brush;
 }

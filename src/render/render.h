@@ -1,7 +1,7 @@
 #ifndef CYCLE_RENDER
 #define CYCLE_RENDER
 
-#include <windef.h>
+#include <stdbool.h>
 #include "zig_types.h"
 
 #ifdef __cplusplus
@@ -10,64 +10,72 @@ extern "C" {
 
 typedef u32 Color;
 
-struct Offset {
+typedef struct Offset {
     f32 dx;
     f32 dy;
-};
+} Offset;
 
-struct Size {
+typedef struct Size {
     f32 width;
     f32 height;
-};
+} Size;
 
-struct Rect {
+typedef struct Rect {
     Offset offset;
     Size size;
-};
+} Rect;
 
-struct RRect {
+typedef struct RRect {
     Rect rect;
     f32 rx;
     f32 ry;
-};
+} RRect;
 
-struct RenderContext;
+typedef struct Context Context;
 
-struct RenderTarget;
+typedef struct Window Window;
 
-struct RenderText;
+typedef struct Object Object;
 
-RenderContext* createRenderContext(HWND hwnd, u32 width, u32 height);
+typedef struct Text Text;
 
-void destroyRenderContext(RenderContext* context);
+Context* createContext();
 
-void beginFrame(RenderContext* context);
+void destroyContext(Context* ctx);
 
-bool endFrame(RenderContext* context);
+Window* createWindow(Context* ctx, void* hwnd, u32 width, u32 height);
 
-void drawTarget(RenderContext* context, RenderTarget* target);
+void destroyWindow(Window* wnd);
 
-RenderTarget* createRenderTarget(RenderContext* context, u32 width, u32 height);
+void resizeWindow(Window* wnd, u32 width, u32 height);
 
-void destroyRenderTarget(RenderTarget* target);
+void beginFrame(Window* wnd);
 
-void beginDraw(RenderTarget* target);
+bool endFrame(Window* wnd);
 
-bool endDraw(RenderTarget* target);
+void drawObject(Window* wnd, Object* obj, Rect pos);
 
-void drawRect(RenderTarget* target, Rect rect, Color color);
+Object* createObject(Window* wnd, Size size);
 
-void drawRRect(RenderTarget* target, RRect rrect, Color color);
+void destroyObject(Object* obj);
 
-void drawText(RenderTarget* target, RenderText* text);
+void beginDraw(Object* obj);
 
-RenderText* createRenderText(RenderTarget* target, Size size, Slice text, f32 text_size);
+bool endDraw(Object* obj);
 
-void destroyRenderText(RenderText* text);
+void drawRect(Object* obj, Rect rect, Color color);
 
-bool resizeText(RenderText* text, Size size);
+void drawRRect(Object* obj, RRect rrect, Color color);
 
-Rect getTextRect(RenderText* text);
+void drawText(Object* obj, Text* text, Offset offset);
+
+Text* createText(Context* ctx, Size max_size, ConstSlice chars, f32 font_size);
+
+void destroyText(Text* text);
+
+bool resizeText(Text* text, Size size);
+
+Rect getTextRect(Text* text);
 
 #ifdef __cplusplus
 }

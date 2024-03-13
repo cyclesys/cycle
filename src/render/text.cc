@@ -1,19 +1,19 @@
 #include "internal.h"
 
-RenderText* createRenderText(RenderContext* context, Size max_size, Slice chars, f32 font_size) {
-    RenderText* text = new RenderText();
+Text* createText(Context* ctx, Size max_size, ConstSlice chars, f32 font_size) {
+    auto text = new Text();
 
     text->chars = new wchar_t[chars.len];
     text->chars_len = MultiByteToWideChar(
         CP_UTF8,
         0,
-        reinterpret_cast<char*>(chars.ptr),
+        reinterpret_cast<const char*>(chars.ptr),
         chars.len,
         text->chars,
         chars.len
     );
 
-    if (context->text_factory->CreateTextFormat(
+    if (ctx->text_factory->CreateTextFormat(
             L"Segoe UI",
             nullptr,
             DWRITE_FONT_WEIGHT_NORMAL,
@@ -23,12 +23,12 @@ RenderText* createRenderText(RenderContext* context, Size max_size, Slice chars,
             L"en-us",
             &text->format
     ) != S_OK) {
-        destroyRenderText(text);
+        destroyText(text);
         return nullptr;
     }
 
 
-    if (context->text_factory->CreateTextLayout(
+    if (ctx->text_factory->CreateTextLayout(
         text->chars,
         text->chars_len,
         text->format,
@@ -36,14 +36,14 @@ RenderText* createRenderText(RenderContext* context, Size max_size, Slice chars,
         max_size.height,
         &text->layout
     ) != S_OK) {
-        destroyRenderText(text);
+        destroyText(text);
         return nullptr;
     }
 
     return text;
 }
 
-void destroyRenderText(RenderText* text) {
+void destroyText(Text* text) {
     RELEASE(text->layout);
     RELEASE(text->format);
     delete[] text->chars;
@@ -51,12 +51,12 @@ void destroyRenderText(RenderText* text) {
     delete text;
 }
 
-bool resizeText(RenderText* text, Size size) {
+bool resizeText(Text* text, Size size) {
     return text->layout->SetMaxWidth(size.width) == S_OK &&
            text->layout->SetMaxHeight(size.height) == S_OK;
 }
 
-Rect getTextRect(RenderText* text) {
+Rect getTextRect(Text* text) {
     DWRITE_TEXT_METRICS metrics;
     text->layout->GetMetrics(&metrics);
     return Rect{
