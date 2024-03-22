@@ -22,19 +22,45 @@ pub const Node = struct {
     pub const Tag = enum(u8) {
         root,
         decl,
-        type,
+
+        identifier,
+        number,
 
         vis_pub,
-
         mut_const,
         mut_var,
 
-        obj_exp,
-        cmd_exp,
-        node_exp,
+        type,
 
-        scheme,
-        identifier,
+        obj_exp,
+        obj_scheme,
+
+        cmd_exp,
+        ui_exp,
+        for_exp,
+        if_exp,
+
+        and_exp,
+        or_exp,
+
+        struct_exp,
+        struct_field,
+
+        struct_init,
+        struct_field_init,
+
+        field_access,
+        array_access,
+
+        string,
+
+        neg_exp,
+        add_exp,
+        sub_exp,
+        div_exp,
+        mul_exp,
+
+        enum_literal,
     };
 };
 
@@ -49,8 +75,10 @@ pub const Result = union(enum) {
 };
 
 pub const Error = struct {
-    expected: tok.Token.Tag,
+    expected: [16]tok.Token.Tag, // .eof is the null terminator
     token: tok.Token,
+
+    const max_expected = 15;
 };
 
 const Parse = struct {
@@ -58,38 +86,6 @@ const Parse = struct {
     tokens: TokenList,
     nodes: NodeList,
     err: ?Error,
-};
-
-const NodeChildren = struct {
-    tail: NodeIndex = 0,
-
-    fn init(nc: *NodeChildren, p: *Parse, parent: NodeIndex, child: NodeIndex) void {
-        p.nodes.items(.head)[parent] = child;
-        nc.tail = child;
-    }
-
-    fn append(nc: *NodeChildren, p: *Parse, child: NodeIndex) void {
-        p.nodes.items(.next)[nc.tail] = child;
-        nc.tail = child;
-    }
-
-    fn initOrAppend(nc: *NodeChildren, p: *Parse, parent: NodeIndex, child: NodeIndex) void {
-        if (nc.tail == 0) {
-            nc.init(p, parent, child);
-        } else {
-            nc.append(p, child);
-        }
-    }
-
-    fn maybeInit(nc: *NodeChildren, p: *Parse, parent: NodeIndex, maybe_child: ?NodeIndex) void {
-        const child = maybe_child orelse return;
-        nc.init(p, parent, child);
-    }
-
-    fn maybeInitOrAppend(nc: *NodeChildren, p: *Parse, parent: NodeIndex, maybe_child: ?NodeIndex) void {
-        const child = maybe_child orelse return;
-        nc.initOrAppend(p, parent, child);
-    }
 };
 
 pub fn parse(allocator: std.mem.Allocator, src: []const u8) !Result {
@@ -100,20 +96,11 @@ pub fn parse(allocator: std.mem.Allocator, src: []const u8) !Result {
         .nodes = NodeList{},
     };
 
-    const root_node = try append(&p, .root, tok.Token{
-        .tag = .eof,
-        .loc = tok.Token.Loc{ .start = 0, .end = 0 },
-    });
-    var root_children = NodeChildren{};
-
-    while (t.hasNext()) {
-        const member_node = parseRootMember(&p, &t) catch |e| {
-            if (e == error.ParseError) {
-                return Result{ .Error = p.err.? };
-            }
-        };
-        root_children.initOrAppend(p, root_node, member_node);
-    }
+    parseRoot(&p, &t) catch |e| {
+        if (e == error.ParseError) {
+            return Result{ .Error = p.err.? };
+        }
+    };
 
     return Result{ .Ast = Ast{
         .tokens = p.tokens.toOwnedSlice(),
@@ -122,22 +109,149 @@ pub fn parse(allocator: std.mem.Allocator, src: []const u8) !Result {
     } };
 }
 
+fn parseRoot(p: *Parse, t: *tok.Tokenizer) !void {
+    const node = try appendNode(&p, .root, tok.Token{
+        .tag = .eof,
+        .loc = tok.Token.Loc{ .start = 0, .end = 0 },
+    });
+    var tail: NodeIndex = 0;
+
+    while (t.hasNext()) {
+        tail = appendChild(p, node, tail, try parseRootMember(p, t));
+    }
+}
+
 fn parseRootMember(p: *Parse, t: *tok.Tokenizer) !NodeIndex {
-    const decl_node = try append(p, .decl, null);
-    var decl_children = NodeChildren{};
+    const node = try appendNode(p, .decl, null);
 
-    decl_children.maybeInit(p, decl_node, try maybeAppend(p, t, .kw_pub, .vis_pub));
-    decl_children.initOrAppend(p, decl_node, try expectAppend(p, t, .identifier, .identifier));
-
+    var tail = appendChild(p, node, 0, try maybeAppend(p, t, .kw_pub, .vis_pub));
+    tail = appendChild(p, node, tail, try expectAppend(p, t, .identifier, .identifier));
     try expectDiscard(p, t, .colon);
     if (!peek(t, .colon)) {
-        decl_children.initOrAppend(p, decl_node, try parseType(p, t));
+        tail = appendChild(p, node, tail, try parseType(p, t));
+    }
+    tail = appendChild(p, node, tail, try expectAppend(p, t, .colon, .mut_const));
+    _ = appendChild(p, node, tail, try parseExpression(p, t));
+
+    return node;
+}
+
+fn parseObjExpression(p: *Parse, t: *tok.Tokenizer) !NodeIndex {
+    const node = try appendNode(p, .obj_exp, t.next());
+    const tail = try parseObjScheme(p, t);
+    setHead(p, node, tail);
+    _ = try parseStructBody(p, t, node, tail);
+    return node;
+}
+
+fn parseObjScheme(p: *Parse, t: *tok.Tokenizer) !NodeIndex {
+    const node = try expectAppend(p, t, .paren_left, .obj_scheme);
+    var tail: NodeIndex = 0;
+
+    var prev: enum { none, ident, sep } = .none;
+    while (t.hasNext()) {
+        if (maybe(t, .paren_right)) |token| {
+            if (prev == .sep) {
+                return err(p, token, .{.identifier});
+            }
+            break;
+        }
+
+        switch (prev) {
+            .none, .sep => {
+                tail = appendChild(p, node, tail, try expectAppend(p, t, .identifier, .identifier));
+                prev = .ident;
+            },
+            .ident => {
+                const token = t.next();
+                if (token.tag != .period) {
+                    return err(p, token, .{ .period, .paren_right });
+                }
+                prev = .sep;
+            },
+        }
+    } else {
+        if (prev == .sep) {
+            return err(p, t.peek(), .{.identifier});
+        }
+        return err(p, t.peek(), .{.paren_right});
     }
 
-    decl_children.initOrAppend(p, decl_node, try expectAppend(p, t, .colon, .mut_const));
-    decl_children.append(p, try parseExpression(p, t));
+    return node;
+}
 
-    return decl_node;
+fn parseCmdExpression(p: *Parse, t: *tok.Tokenizer) !NodeIndex {
+    const node = try appendNode(p, .cmd_exp, t.next());
+    _ = try parseStructBody(p, t, node, 0);
+    return node;
+}
+
+fn parseUiExpression(p: *Parse, t: *tok.Tokenizer) !NodeIndex {
+    const node = try appendNode(p, .ui_exp, t.next());
+    const tail: NodeIndex = try parseStructBody(p, t, node, 0);
+    try expectDiscard(p, t, .arrow);
+    _ = appendChild(p, node, tail, try parseExpression(p, t));
+    return node;
+}
+
+fn parseStructBody(p: *Parse, t: *tok.Tokenizer, parent: NodeIndex, tail: NodeIndex) !NodeIndex {
+    try expectDiscard(p, t, .brace_left);
+
+    while (t.hasNext()) {
+        if (maybe(t, .brace_right) != null) {
+            break;
+        }
+        tail = appendChild(p, parent, tail, try parseStructField(p, t));
+    } else {
+        return err(p, Error{
+            .expected = .brace_right,
+            .token = t.peek(), // should return an .eof token
+        });
+    }
+
+    return tail;
+}
+
+fn parseStructField(p: *Parse, t: *tok.Tokenizer) !NodeIndex {
+    const node = try appendNode(p, .struct_field, null);
+    const tail: NodeIndex = appendChild(p, node, 0, try expectAppend(p, t, .identifier, .identifier));
+    try expectDiscard(p, t, .colon);
+    _ = appendChild(p, node, tail, try parseType(p, t));
+    maybeDiscard(t, .comma);
+
+    return node;
+}
+
+fn parseStructInit(p: *Parse, t: *tok.Tokenizer) !NodeIndex {
+    const node = try expectAppend(p, t, .brace_left, .struct_init);
+    var tail: NodeIndex = 0;
+
+    while (t.hasNext()) {
+        if (maybe(t, .brace_right) != null) {
+            break;
+        }
+        if (tail != 0) {
+            try expectDiscard(p, t, .comma);
+        }
+        tail = appendChild(p, node, tail, try parseStructFieldInit(p, t));
+    } else {
+        return err(p, t.peek(), .{.brace_right});
+    }
+
+    return node;
+}
+
+fn parseStructFieldInit(p: *Parse, t: *tok.Tokenizer) !NodeIndex {
+    const node = try appendNode(p, .struct_field_init, null);
+
+    const expect_value = maybe(t, .period) != null;
+    const tail = setHead(p, node, try expectAppend(p, t, .identifier, .identifier));
+    if (expect_value) {
+        try expectDiscard(p, t, .equal);
+        setNext(p, tail, try parseExpression(p, t));
+    }
+
+    return node;
 }
 
 fn parseType(p: *Parse, t: *tok.Tokenizer) !NodeIndex {
@@ -145,75 +259,176 @@ fn parseType(p: *Parse, t: *tok.Tokenizer) !NodeIndex {
 }
 
 fn parseExpression(p: *Parse, t: *tok.Tokenizer) !NodeIndex {
-    const token = t.peek();
-    switch (token.tag) {
-        .kw_obj => return try parseObjExp(p, t),
-        .kw_cmd => return try parseCmdExp(p, t),
-        .kw_node => return try parseNodeExp(p, t),
-    }
-}
+    var node: NodeIndex = 0;
 
-fn parseObjExp(p: *Parse, t: *tok.Tokenizer) !NodeIndex {
-    const obj_node = try append(p, .obj_exp, t.next());
-    var obj_children = NodeChildren{};
-    obj_children.init(p, obj_node, try parseObjScheme(p, t));
-    return obj_node;
-}
-
-fn parseObjScheme(p: *Parse, t: *tok.Tokenizer) !NodeIndex {
-    try expectDiscard(p, t, .paren_left);
-
-    const scheme_node = try append(p, .scheme, null);
-    var scheme_children = NodeChildren{};
-
-    var next: enum { ident, sep_or_close } = .ident;
-    while (t.hasNext()) {
-        switch (next) {
-            .ident => {
-                scheme_children.initOrAppend(p, scheme_node, try expectAppend(p, t, .identifier, .identifier));
-                next = .sep;
+    var token = t.peek();
+    while (t.hasNext()) : (token = t.peek()) {
+        if (node == 0) switch (token.tag) {
+            .minus => {
+                node = parseUnaryOp(p, t, .neg_exp);
             },
-            .sep_or_close => {
-                const token = t.next();
-                switch (token.tag) {
-                    .period => {
-                        next = .ident;
-                    },
-                    .paren_right => {
-                        break;
-                    },
-                    else => {
-                        return err(p, Error{
-                            .expected = .paren_right,
-                            .token = token,
-                        });
-                    },
-                }
+            .binary, .octal, .decimal, .hex, .float => {
+                t.move(token);
+                node = try appendNode(p, .number, token);
+            },
+            .identifier, .builtin => {
+                node = try parseIdentExpression(p, t);
+            },
+            .string => {
+                node = try appendNode(p, .string, token);
+            },
+            .kw_for => {
+                node = try parseForExpression(p, t);
+            },
+            .kw_if => {
+                node = try parseIfExpression(p, t);
+            },
+            .period => {
+                return try parseEnumLiteral(p, t);
+            },
+            .kw_obj => {
+                return try parseObjExpression(p, t);
+            },
+            .kw_ui => {
+                return try parseUiExpression(p, t);
+            },
+            .kw_cmd => {
+                return try parseCmdExpression(p, t);
+            },
+            else => return err(p, token, .{
+                .identifier,
+                .minus,
+                .binary,
+                .octal,
+                .decimal,
+                .hex,
+                .float,
+                .period,
+                .kw_obj,
+                .kw_ui,
+                .kw_cmd,
+                .kw_for,
+                .kw_if,
+            }),
+        } else switch (token.tag) {
+            .plus => {
+                node = parseBinaryOp(p, t, .add_exp, node);
+            },
+            .minus => {
+                node = parseBinaryOp(p, t, .sub_exp, node);
+            },
+            .slash => {
+                node = parseBinaryOp(p, t, .div_exp, node);
+            },
+            .asterisk => {
+                node = parseBinaryOp(p, t, .mul_exp, node);
+            },
+            .kw_and => {
+                node = parseBinaryOp(p, t, .and_exp, node);
+            },
+            .kw_or => {
+                node = parseBinaryOp(p, t, .or_exp, node);
+            },
+            else => {
+                // expression ends at `node`
             },
         }
-    } else {
-        return err(p, Error{
-            .expected = if (next == .ident) .identifier else .paren_right,
-            .token = t.peek(), // should return an .eof token
-        });
     }
 
-    return scheme_node;
+    return node;
 }
 
-fn parseStructField(p: *Parse, t: *tok.Tokenizer) void {
-    _ = p;
-    _ = t;
+fn parseUnaryOp(p: *Parse, t: *tok.Tokenizer, exp: Node.Tag) !NodeIndex {
+    const node = try appendNode(p, exp, t.next());
+    const operand = try parseExpression(p, t);
+    setHead(p, node, operand);
+    return node;
 }
 
-fn parseCmdExp(p: *Parse, t: *tok.Tokenizer) !NodeIndex {
-    _ = p;
-    _ = t;
+fn parseBinaryOp(p: *Parse, t: *tok.Tokenizer, exp: Node.Tag, left: NodeIndex) !NodeIndex {
+    const node = try appendNode(p, exp, t.next());
+    setHead(p, node, left);
+    const right = try parseExpression(p, t);
+    setNext(p, left, right);
+    return node;
 }
 
-fn parseNodeExp(p: *Parse, t: *tok.Tokenizer) !NodeIndex {
-    _ = p;
-    _ = t;
+fn parseIdentExpression(p: *Parse, t: *tok.Tokenizer) !NodeIndex {
+    const node = try appendNode(p, .identifier, t.next());
+    return try parseReceiverExpression(p, t, node);
+}
+
+fn parseForExpression(p: *Parse, t: *tok.Tokenizer) !NodeIndex {
+    const node = try appendNode(p, .for_exp, t.next());
+    const args = try parseExpression(p, t);
+    try expectDiscard(p, t, .arrow);
+    const exp = try parseExpression(p, t);
+    setHead(p, node, args);
+    setNext(p, args, exp);
+    return node;
+}
+
+fn parseIfExpression(p: *Parse, t: *tok.Tokenizer) !NodeIndex {
+    const node = try appendNode(p, .if_exp, t.next());
+    const args = try parseExpression(p, t);
+    setHead(p, node, args);
+    try expectDiscard(p, t, .arrow);
+    const exp = try parseExpression(p, t);
+    setNext(p, args, exp);
+
+    if (maybe(t, .kw_else) != null) {
+        const else_exp = if (t.peek().tag == .kw_if)
+            try parseIfExpression(p, t)
+        else
+            try parseExpression(p, t);
+        setNext(p, exp, else_exp);
+    }
+
+    return node;
+}
+
+fn parseEnumLiteral(p: *Parse, t: *tok.Tokenizer) !NodeIndex {
+    const node = try appendNode(p, .enum_literal, t.next());
+    setHead(p, node, try expectAppend(p, t, .identifier, .identifier));
+    return node;
+}
+
+fn parseReceiverExpression(p: *Parse, t: *tok.Tokenizer, receiver: NodeIndex) !NodeIndex {
+    var exp_node: NodeIndex = undefined;
+
+    const token = t.peek();
+    switch (token.tag) {
+        .period => {
+            exp_node = try parseFieldAccess(p, t, receiver);
+        },
+        .brace_left => {
+            exp_node = try parseStructInit(p, t, receiver);
+        },
+        .bracket_left => {
+            exp_node = try parseArrayAccess(p, t, receiver);
+        },
+        else => {
+            return receiver;
+        },
+    }
+
+    return try parseReceiverExpression(p, t, exp_node);
+}
+
+fn parseFieldAccess(p: *Parse, t: *tok.Tokenizer, left: NodeIndex) !NodeIndex {
+    const node = try appendNode(p, .field_access, t.next());
+    setHead(p, node, left);
+    setNext(p, left, try expectAppend(p, t, .identifier, .identifier));
+    return node;
+}
+
+fn parseArrayAccess(p: *Parse, t: *tok.Tokenizer, left: NodeIndex) !NodeIndex {
+    const node = try appendNode(p, .array_access, t.next());
+    setHead(p, node, left);
+    const index = try parseExpression(p, t);
+    setNext(p, left, index);
+    try expectDiscard(p, t, .bracket_right);
+    return node;
 }
 
 fn maybe(t: *tok.Tokenizer, tag: tok.Token.Tag) ?tok.Token {
@@ -225,35 +440,25 @@ fn maybe(t: *tok.Tokenizer, tag: tok.Token.Tag) ?tok.Token {
     return token;
 }
 
-fn maybeDiscard(t: *tok.Tokenizer, tag: tok.Token.Tag) bool {
-    return maybe(t, tag) != null;
+fn maybeToEof(t: *tok.Tokenizer, tag: tok.Token.Tag) ?tok.Token {
+    const token = t.peek();
+    if (token.tag == .eof) {
+        return token;
+    }
+
+    if (token.tag != tag) {
+        return null;
+    }
+    t.move(token);
+    return token;
+}
+
+fn maybeDiscard(t: *tok.Tokenizer, tag: tok.Token.Tag) void {
+    _ = maybe(t, tag) != null;
 }
 
 inline fn peek(t: tok.Tokenizer, tag: tok.Token.Tag) bool {
     return t.peek().tag == tag;
-}
-
-fn append(p: *Parse, tag: Node.Tag, token: ?tok.Token) !NodeIndex {
-    var token_index: TokenIndex = 0;
-    if (token) |t| {
-        token_index = @intCast(try p.tokens.addOne(p.allocator));
-        p.tokens.set(token_index, t);
-    }
-
-    const node_index: NodeIndex = @intCast(try p.nodes.addOne(p.allocator));
-    p.nodes.set(node_index, Node{
-        .tag = tag,
-        .token = token_index,
-        .child = 0,
-        .sibling = 0,
-    });
-
-    return node_index;
-}
-
-fn maybeAppend(p: *Parse, t: *tok.Tokenizer, expected: tok.Token.Tag, tag: Node.Tag) !?NodeIndex {
-    const token = maybe(t, expected) orelse return null;
-    return try append(p, tag, token);
 }
 
 fn expect(p: *Parse, t: *tok.Tokenizer, tag: tok.Token.Tag) !tok.Token {
@@ -267,15 +472,94 @@ fn expect(p: *Parse, t: *tok.Tokenizer, tag: tok.Token.Tag) !tok.Token {
     return token;
 }
 
+fn expectAny(p: *Parse, t: *tok.Tokenizer, any: anytype) !tok.Token {
+    const token = t.next();
+    inline for (any) |tag| {
+        if (token.tag == tag) {
+            return token;
+        }
+    }
+    return err(p, any, token);
+}
+
 fn expectDiscard(p: *Parse, t: *tok.Tokenizer, tag: tok.Token.Tag) !void {
     _ = try expect(p, t, tag);
 }
 
 fn expectAppend(p: *Parse, t: *tok.Tokenizer, expected: tok.Token.Tag, tag: Node.Tag) !NodeIndex {
-    return try append(p, tag, try expect(p, t, expected));
+    return try appendNode(p, tag, try expect(p, t, expected));
 }
 
-fn err(p: *Parse, e: Error) anyerror {
+fn expectAppendAny(p: *Parse, t: *tok.Tokenizer, any: anytype) !NodeIndex {
+    var expected: [any.len]tok.Token.Tag = undefined;
+    const token = t.next();
+    inline for (any, 0..) |pair, i| {
+        if (token.tag == pair[0]) {
+            return try appendNode(p, pair[1], token);
+        }
+        expected[i] = pair[0];
+    }
+
+    return err(p, expected, token);
+}
+
+inline fn setHead(p: *Parse, parent: NodeIndex, child: NodeIndex) void {
+    p.nodes.items(.head)[parent] = child;
+}
+
+inline fn setNext(p: *Parse, tail: NodeIndex, child: NodeIndex) void {
+    p.nodes.items(.next)[tail] = child;
+}
+
+fn appendChild(p: *Parse, parent: NodeIndex, tail: NodeIndex, maybe_child: ?NodeIndex) NodeIndex {
+    const child = maybe_child orelse return tail;
+    if (tail == 0) {
+        setHead(p, parent, child);
+    } else {
+        setNext(p, tail, child);
+    }
+    return child;
+}
+
+fn appendNode(p: *Parse, tag: Node.Tag, token: ?tok.Token) !NodeIndex {
+    const token_index = if (token) |t| try appendToken(p, t) else 0;
+    const node_index: NodeIndex = @intCast(try p.nodes.addOne(p.allocator));
+    p.nodes.set(node_index, Node{
+        .tag = tag,
+        .token = token_index,
+        .child = 0,
+        .sibling = 0,
+    });
+    return node_index;
+}
+
+fn appendToken(p: *Parse, token: tok.Token) !TokenIndex {
+    const index: TokenIndex = @intCast(try p.tokens.addOne(p.allocator));
+    p.tokens.set(index, token);
+    return index;
+}
+
+fn maybeAppend(p: *Parse, t: *tok.Tokenizer, expected: tok.Token.Tag, tag: Node.Tag) !?NodeIndex {
+    const token = maybe(t, expected) orelse return null;
+    return try appendNode(p, tag, token);
+}
+
+fn err(p: *Parse, token: tok.Token, expected: anytype) anyerror {
+    var e = Error{
+        .expected = undefined,
+        .token = token,
+    };
+
+    comptime var len = 0;
+    inline for (expected) |tag| {
+        e.expected[len] = tag;
+        len += 1;
+        if (len > Error.max_expected) {
+            @compileError("err cannot expect more than 7 tokens");
+        }
+    }
+    e.expected[len] = .eof;
+
     p.err = e;
     return error.ParseError;
 }

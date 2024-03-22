@@ -45,11 +45,13 @@ pub const Token = struct {
         // keywords
         kw_pub,
         kw_obj,
-        kw_node,
+        kw_ui,
         kw_cmd,
         kw_for,
         kw_if,
         kw_else,
+        kw_and,
+        kw_or,
 
         eof,
         invalid,
@@ -70,11 +72,13 @@ pub const Token = struct {
 const keywords = std.ComptimeStringMap(Token.Tag, .{
     .{ "pub", .kw_pub },
     .{ "obj", .kw_obj },
-    .{ "node", .kw_node },
+    .{ "ui", .kw_ui },
     .{ "cmd", .kw_cmd },
     .{ "for", .kw_for },
     .{ "if", .kw_if },
     .{ "else", .kw_else },
+    .{ "and", .kw_and },
+    .{ "or", .kw_or },
 });
 
 pub const Tokenizer = struct {
@@ -102,6 +106,14 @@ pub const Tokenizer = struct {
         return token;
     }
 
+    pub fn peekNext(t: *Tokenizer, curr: Token) Token {
+        const pos = t.pos;
+        t.pos = curr.loc.end;
+        const token = t.peek();
+        t.pos = pos;
+        return token;
+    }
+
     pub fn peek(t: Tokenizer) Token {
         if (!t.hasNext()) {
             return Token{
@@ -122,7 +134,6 @@ pub const Tokenizer = struct {
 
         var state: enum {
             start,
-            minus,
             exclamation,
             equal,
             zero,
@@ -156,7 +167,8 @@ pub const Tokenizer = struct {
                     },
                     '-' => {
                         tag = .minus;
-                        state = .minus;
+                        pos += 1;
+                        break;
                     },
                     '*' => {
                         tag = .asterisk;
@@ -264,17 +276,6 @@ pub const Tokenizer = struct {
                         pos += 1;
                         break;
                     },
-                },
-                .minus => switch (c) {
-                    '0' => {
-                        tag = .decimal;
-                        state = .zero;
-                    },
-                    '1'...'9' => {
-                        tag = .decimal;
-                        state = .decimal;
-                    },
-                    else => break,
                 },
                 .slash => switch (c) {
                     '/' => {
@@ -811,8 +812,8 @@ test "at sign" {
 
 test "keywords" {
     try expectTokenTags(
-        " pub obj node cmd for if else",
-        &.{ .kw_pub, .kw_obj, .kw_node, .kw_cmd, .kw_for, .kw_if, .kw_else },
+        " pub obj ui cmd for if else and or",
+        &.{ .kw_pub, .kw_obj, .kw_ui, .kw_cmd, .kw_for, .kw_if, .kw_else, .kw_and, .kw_or },
     );
 }
 
