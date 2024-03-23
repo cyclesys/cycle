@@ -22,10 +22,14 @@ pub const Token = struct {
         bracket_right,
         brace_left,
         brace_right,
+        angled_greater,
+        angled_lesser,
 
         // multi char symbols
         equal_equal,
         not_equal,
+        greater_equal,
+        lesser_equal,
         arrow,
 
         // number literals
@@ -56,17 +60,11 @@ pub const Token = struct {
         eof,
         invalid,
     };
+};
 
-    pub const SrcOffset = u16;
-
-    pub const Loc = packed struct(u32) {
-        start: SrcOffset,
-        end: SrcOffset,
-    };
-
-    pub inline fn str(t: Token, src: []const u8) []const u8 {
-        return src[t.loc.start..t.loc.end];
-    }
+pub const Loc = packed struct(u32) {
+    start: u16,
+    end: u16,
 };
 
 const keywords = std.ComptimeStringMap(Token.Tag, .{
@@ -92,10 +90,6 @@ pub const Tokenizer = struct {
         };
     }
 
-    pub fn hasNext(t: Tokenizer) bool {
-        return t.pos < t.src.len;
-    }
-
     pub fn move(t: *Tokenizer, token: Token) void {
         t.pos = token.loc.end;
     }
@@ -115,9 +109,9 @@ pub const Tokenizer = struct {
     }
 
     pub fn peek(t: Tokenizer) Token {
-        if (!t.hasNext()) {
+        if (t.pos >= t.src.len) {
             return Token{
-                .loc = Token.Loc{
+                .loc = Loc{
                     .start = @intCast(t.pos),
                     .end = @intCast(t.pos),
                 },
@@ -134,8 +128,10 @@ pub const Tokenizer = struct {
 
         var state: enum {
             start,
-            exclamation,
             equal,
+            exclamation,
+            angled_greater,
+            angled_lesser,
             zero,
             binary,
             octal,
@@ -239,6 +235,14 @@ pub const Tokenizer = struct {
                         pos += 1;
                         break;
                     },
+                    '>' => {
+                        tag = .angled_greater;
+                        state = .angled_greater;
+                    },
+                    '<' => {
+                        tag = .angled_lesser;
+                        state = .angled_lesser;
+                    },
                     '0' => {
                         tag = .decimal;
                         state = .zero;
@@ -302,6 +306,20 @@ pub const Tokenizer = struct {
                 .exclamation => {
                     if (c == '=') {
                         tag = .not_equal;
+                        pos += 1;
+                    }
+                    break;
+                },
+                .angled_greater => {
+                    if (c == '=') {
+                        tag = .greater_equal;
+                        pos += 1;
+                    }
+                    break;
+                },
+                .angled_lesser => {
+                    if (c == '=') {
+                        tag = .lesser_equal;
                         pos += 1;
                     }
                     break;
@@ -621,7 +639,7 @@ pub const Tokenizer = struct {
 
         return Token{
             .tag = tag,
-            .loc = Token.Loc{
+            .loc = Loc{
                 .start = @intCast(start),
                 .end = @intCast(end orelse pos),
             },
@@ -630,7 +648,7 @@ pub const Tokenizer = struct {
 };
 
 test "symbols" {
-    try expectTokenTags("+-/*.,?:;()[]{}", &.{
+    try expectTokenTags("+-/*.,?:;()[]{}><", &.{
         .plus,
         .minus,
         .slash,
@@ -646,11 +664,19 @@ test "symbols" {
         .bracket_right,
         .brace_left,
         .brace_right,
+        .angled_greater,
+        .angled_lesser,
     });
 }
 
 test "multi symbols" {
-    try expectTokenTags(" == != => ", &.{ .equal_equal, .not_equal, .arrow });
+    try expectTokenTags(" == != >= <= =>", &.{
+        .equal_equal,
+        .not_equal,
+        .greater_equal,
+        .lesser_equal,
+        .arrow,
+    });
 }
 
 test "incomplete symbols" {
