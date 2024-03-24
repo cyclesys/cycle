@@ -51,6 +51,9 @@ pub const Token = struct {
         kw_obj,
         kw_ui,
         kw_cmd,
+        kw_struct,
+        kw_enum,
+        kw_union,
         kw_for,
         kw_if,
         kw_else,
@@ -72,6 +75,9 @@ const keywords = std.ComptimeStringMap(Token.Tag, .{
     .{ "obj", .kw_obj },
     .{ "ui", .kw_ui },
     .{ "cmd", .kw_cmd },
+    .{ "struct", .kw_struct },
+    .{ "enum", .kw_enum },
+    .{ "union", .kw_union },
     .{ "for", .kw_for },
     .{ "if", .kw_if },
     .{ "else", .kw_else },
@@ -838,8 +844,8 @@ test "at sign" {
 
 test "keywords" {
     try expectTokenTags(
-        " pub obj ui cmd for if else and or",
-        &.{ .kw_pub, .kw_obj, .kw_ui, .kw_cmd, .kw_for, .kw_if, .kw_else, .kw_and, .kw_or },
+        " pub obj ui cmd struct enum union for if else and or",
+        &.{ .kw_pub, .kw_obj, .kw_ui, .kw_cmd, .kw_struct, .kw_enum, .kw_union, .kw_for, .kw_if, .kw_else, .kw_and, .kw_or },
     );
 }
 

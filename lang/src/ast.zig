@@ -13,27 +13,30 @@ pub const Node = struct {
         root,
 
         decl,
-        vis_pub,
-        mut_const,
-        mut_var,
+        decl_vis_pub,
+        decl_mut_const,
+        decl_mut_var,
 
         type_ident,
         type_builtin,
-        type_array,
         type_list,
+        type_array,
         type_map,
+
+        struct_exp,
+        struct_field,
+
+        enum_exp,
+        enum_field,
+
+        union_exp,
+        union_tag,
 
         obj_exp,
         obj_scheme,
 
         cmd_exp,
         ui_exp,
-
-        struct_exp,
-        struct_field,
-
-        struct_init,
-        struct_field_init,
 
         neg_exp,
         add_exp,
@@ -55,6 +58,9 @@ pub const Node = struct {
 
         assign_exp,
         group_exp,
+
+        struct_init,
+        struct_field_init,
 
         field_access,
         array_access,
@@ -184,6 +190,15 @@ fn parseExpression(p: *Parse, t: *tok.Tokenizer, unit_only: bool) ParseError!Nod
                 .kw_cmd => {
                     return try parseCmdExpression(p, t);
                 },
+                .kw_struct => {
+                    return try parseStructExpression(p, t);
+                },
+                .kw_enum => {
+                    return try parseEnumExpression(p, t);
+                },
+                .kw_union => {
+                    return try parseUnionExpression(p, t);
+                },
                 .kw_for => {
                     node = try parseForExpression(p, t);
                 },
@@ -234,7 +249,7 @@ fn parseExpression(p: *Parse, t: *tok.Tokenizer, unit_only: bool) ParseError!Nod
                 node = try parseBinaryOp(p, t, .or_exp, node);
             },
             .equal => {
-                node = try parseBinaryOp(p, t, .assign_exp, node);
+                return try parseAssignExpression(p, t, node);
             },
             .equal_equal => {
                 node = try parseBinaryOp(p, t, .eql_exp, node);
@@ -264,14 +279,14 @@ fn parseExpression(p: *Parse, t: *tok.Tokenizer, unit_only: bool) ParseError!Nod
 fn parseDecl(p: *Parse, t: *tok.Tokenizer) ParseError!NodeIndex {
     const node = try appendNode(p, .decl, null);
 
-    var tail = appendChild(p, node, 0, try maybeAppend(p, t, .kw_pub, .vis_pub));
+    var tail = appendChild(p, node, 0, try maybeAppend(p, t, .kw_pub, .decl_vis_pub));
     tail = appendChild(p, node, tail, try expectAppend(p, t, .identifier, .identifier));
     try expectDiscard(p, t, .colon);
 
-    var mut = try parseMutAssign(p, t, false);
+    var mut = try parseDeclMut(p, t, false);
     if (mut == 0) {
         tail = appendChild(p, node, tail, try parseType(p, t));
-        mut = try parseMutAssign(p, t, true);
+        mut = try parseDeclMut(p, t, true);
     }
     tail = appendChild(p, node, tail, mut);
     _ = appendChild(p, node, tail, try parseExpression(p, t, false));
@@ -279,16 +294,16 @@ fn parseDecl(p: *Parse, t: *tok.Tokenizer) ParseError!NodeIndex {
     return node;
 }
 
-fn parseMutAssign(p: *Parse, t: *tok.Tokenizer, expected: bool) ParseError!NodeIndex {
+fn parseDeclMut(p: *Parse, t: *tok.Tokenizer, expected: bool) ParseError!NodeIndex {
     const token = t.peek();
     switch (token.tag) {
         .colon => {
             t.move(token);
-            return try appendNode(p, .mut_const, token);
+            return try appendNode(p, .decl_mut_const, token);
         },
         .equal => {
             t.move(token);
-            return try appendNode(p, .mut_var, token);
+            return try appendNode(p, .decl_mut_var, token);
         },
         else => {
             if (expected) {
@@ -306,12 +321,10 @@ fn parseType(p: *Parse, t: *tok.Tokenizer) ParseError!NodeIndex {
             return parseBracketType(p, t);
         },
         .identifier => {
-            t.move(token);
-            return try appendNode(p, .type_ident, token);
+            return try parseIdentExpression(p, t, .type_ident);
         },
         .builtin => {
-            t.move(token);
-            return try appendNode(p, .type_builtin, token);
+            return try parseIdentExpression(p, t, .type_builtin);
         },
         else => {
             return err(p, token, .{
@@ -328,15 +341,16 @@ fn parseBracketType(p: *Parse, t: *tok.Tokenizer) ParseError!NodeIndex {
 
     const token = t.peek();
     if (isNumber(token)) {
-        setTag(p, node, .type_array);
+        t.move(token);
         const head = appendChild(p, node, 0, try appendNode(p, numTag(token.tag), token));
         try expectDiscard(p, t, .colon);
         _ = appendChild(p, node, head, try parseType(p, t));
+        setTag(p, node, .type_array);
     } else {
         const head = appendChild(p, node, 0, try parseType(p, t));
         if (maybe(t, .colon) != null) {
-            setTag(p, node, .type_map);
             _ = appendChild(p, node, head, try parseType(p, t));
+            setTag(p, node, .type_map);
         }
     }
     try expectDiscard(p, t, .bracket_right);
@@ -366,7 +380,7 @@ fn parseObjExpression(p: *Parse, t: *tok.Tokenizer) ParseError!NodeIndex {
     const node = try appendNode(p, .obj_exp, t.next());
     const tail = try parseObjScheme(p, t);
     setHead(p, node, tail);
-    _ = try parseStructBody(p, t, node, tail);
+    _ = try parseContainerBody(p, t, node, tail, parseStructField);
     return node;
 }
 
@@ -408,33 +422,22 @@ fn parseObjScheme(p: *Parse, t: *tok.Tokenizer) ParseError!NodeIndex {
 
 fn parseCmdExpression(p: *Parse, t: *tok.Tokenizer) ParseError!NodeIndex {
     const node = try appendNode(p, .cmd_exp, t.next());
-    _ = try parseStructBody(p, t, node, 0);
+    _ = try parseContainerBody(p, t, node, 0, parseStructField);
     return node;
 }
 
 fn parseUiExpression(p: *Parse, t: *tok.Tokenizer) ParseError!NodeIndex {
     const node = try appendNode(p, .ui_exp, t.next());
-    const tail: NodeIndex = try parseStructBody(p, t, node, 0);
+    const tail: NodeIndex = try parseContainerBody(p, t, node, 0, parseStructField);
     try expectDiscard(p, t, .arrow);
     _ = appendChild(p, node, tail, try parseExpression(p, t, false));
     return node;
 }
 
-fn parseStructBody(p: *Parse, t: *tok.Tokenizer, parent: NodeIndex, child: NodeIndex) ParseError!NodeIndex {
-    try expectDiscard(p, t, .brace_left);
-
-    var tail = child;
-    while (t.peek().tag != .eof) {
-        if (maybe(t, .brace_right) != null) {
-            break;
-        }
-        tail = appendChild(p, parent, tail, try parseStructField(p, t));
-        maybeDiscard(t, .comma);
-    } else {
-        return err(p, t.peek(), .{.brace_right});
-    }
-
-    return tail;
+fn parseStructExpression(p: *Parse, t: *tok.Tokenizer) ParseError!NodeIndex {
+    const node = try appendNode(p, .struct_exp, t.next());
+    _ = try parseContainerBody(p, t, node, 0, parseStructField);
+    return node;
 }
 
 fn parseStructField(p: *Parse, t: *tok.Tokenizer) ParseError!NodeIndex {
@@ -444,6 +447,85 @@ fn parseStructField(p: *Parse, t: *tok.Tokenizer) ParseError!NodeIndex {
     _ = appendChild(p, node, tail, try parseType(p, t));
 
     return node;
+}
+
+fn parseEnumExpression(p: *Parse, t: *tok.Tokenizer) ParseError!NodeIndex {
+    const node = try appendNode(p, .enum_exp, t.next());
+    _ = try parseContainerBody(p, t, node, 0, parseEnumField);
+    return node;
+}
+
+fn parseEnumField(p: *Parse, t: *tok.Tokenizer) ParseError!NodeIndex {
+    const node = try appendNode(p, .enum_field, null);
+    const head = try expectAppend(p, t, .identifier, .identifier);
+    setHead(p, node, head);
+    if (maybe(t, .equal) != null) {
+        setNext(p, head, try parseExpression(p, t, false));
+    }
+    return node;
+}
+
+fn parseEnumLiteral(p: *Parse, t: *tok.Tokenizer) ParseError!NodeIndex {
+    const node = try appendNode(p, .enum_literal, t.next());
+    setHead(p, node, try expectAppend(p, t, .identifier, .identifier));
+    return node;
+}
+
+fn parseUnionExpression(p: *Parse, t: *tok.Tokenizer) ParseError!NodeIndex {
+    const node = try appendNode(p, .union_exp, t.next());
+    const head = try parseUnionTag(p, t);
+    setHead(p, node, head);
+    _ = try parseContainerBody(p, t, node, head, parseStructField);
+    return node;
+}
+
+fn parseUnionTag(p: *Parse, t: *tok.Tokenizer) ParseError!NodeIndex {
+    if (maybe(t, .paren_left) == null) {
+        return 0;
+    }
+
+    const token = t.next();
+    const node = switch (token.tag) {
+        .kw_enum, .identifier => try appendNode(p, .union_tag, token),
+        else => {
+            return err(p, token, .{ .kw_enum, .identifier });
+        },
+    };
+    try expectDiscard(p, t, .paren_right);
+
+    return node;
+}
+
+fn parseContainerBody(
+    p: *Parse,
+    t: *tok.Tokenizer,
+    parent: NodeIndex,
+    child: NodeIndex,
+    parseFieldFn: fn (*Parse, *tok.Tokenizer) ParseError!NodeIndex,
+) ParseError!NodeIndex {
+    try expectDiscard(p, t, .brace_left);
+
+    var missing_sep = false;
+    var tail = child;
+    while (t.peek().tag != .eof) {
+        if (maybe(t, .brace_right) != null) {
+            break;
+        }
+
+        if (missing_sep) {
+            return err(p, t.peek(), .{ .comma, .brace_right });
+        }
+
+        tail = appendChild(p, parent, tail, try parseFieldFn(p, t));
+
+        if (maybe(t, .comma) == null) {
+            missing_sep = true;
+        }
+    } else {
+        return err(p, t.peek(), .{.brace_right});
+    }
+
+    return tail;
 }
 
 fn parseStructInit(p: *Parse, t: *tok.Tokenizer, receiver: NodeIndex) ParseError!NodeIndex {
@@ -503,6 +585,14 @@ fn parseBinaryOp(p: *Parse, t: *tok.Tokenizer, exp: Node.Tag, left: NodeIndex) P
     return node;
 }
 
+fn parseAssignExpression(p: *Parse, t: *tok.Tokenizer, left: NodeIndex) ParseError!NodeIndex {
+    const node = try appendNode(p, .assign_exp, t.next());
+    setHead(p, node, left);
+    const right = try parseExpression(p, t, false);
+    setNext(p, left, right);
+    return node;
+}
+
 fn parseGroupExp(p: *Parse, t: *tok.Tokenizer) ParseError!NodeIndex {
     const node = try appendNode(p, .group_exp, t.next());
     const exp = try parseExpression(p, t, false);
@@ -542,12 +632,6 @@ fn parseIfExpression(p: *Parse, t: *tok.Tokenizer) ParseError!NodeIndex {
         setNext(p, exp, else_exp);
     }
 
-    return node;
-}
-
-fn parseEnumLiteral(p: *Parse, t: *tok.Tokenizer) ParseError!NodeIndex {
-    const node = try appendNode(p, .enum_literal, t.next());
-    setHead(p, node, try expectAppend(p, t, .identifier, .identifier));
     return node;
 }
 
@@ -627,35 +711,12 @@ fn expect(p: *Parse, t: *tok.Tokenizer, tag: tok.Token.Tag) ParseError!tok.Token
     return token;
 }
 
-fn expectAny(p: *Parse, t: *tok.Tokenizer, any: anytype) ParseError!tok.Token {
-    const token = t.next();
-    inline for (any) |tag| {
-        if (token.tag == tag) {
-            return token;
-        }
-    }
-    return err(p, any, token);
-}
-
 fn expectDiscard(p: *Parse, t: *tok.Tokenizer, tag: tok.Token.Tag) ParseError!void {
     _ = try expect(p, t, tag);
 }
 
 fn expectAppend(p: *Parse, t: *tok.Tokenizer, expected: tok.Token.Tag, tag: Node.Tag) ParseError!NodeIndex {
     return try appendNode(p, tag, try expect(p, t, expected));
-}
-
-fn expectAppendAny(p: *Parse, t: *tok.Tokenizer, any: anytype) ParseError!NodeIndex {
-    var expected: [any.len]tok.Token.Tag = undefined;
-    const token = t.next();
-    inline for (any, 0..) |pair, i| {
-        if (token.tag == pair[0]) {
-            return try appendNode(p, pair[1], token);
-        }
-        expected[i] = pair[0];
-    }
-
-    return err(p, expected, token);
 }
 
 inline fn setTag(p: *Parse, node: NodeIndex, tag: Node.Tag) void {
@@ -739,28 +800,15 @@ test "arithmetic exp" {
     });
 }
 
-test "for exp" {
-    const src = "for list => it + 1";
+test "str add exp" {
+    const src = "\"Hello\" + \" \" + \"world!\"";
     try expectAst(src, &.{
-        .{ .tag = .for_exp, .children = &.{
-            .{ .tag = .identifier, .str = "list" },
+        .{ .tag = .add_exp, .children = &.{
             .{ .tag = .add_exp, .children = &.{
-                .{ .tag = .identifier, .str = "it" },
-                .{ .tag = .num_decimal, .str = "1" },
+                .{ .tag = .string, .str = "\"Hello\"" },
+                .{ .tag = .string, .str = "\" \"" },
             } },
-        } },
-    });
-}
-
-test "boolean exp" {
-    const src = "some_bool and other_bool or last_bool";
-    try expectAst(src, &.{
-        .{ .tag = .or_exp, .children = &.{
-            .{ .tag = .and_exp, .children = &.{
-                .{ .tag = .identifier, .str = "some_bool" },
-                .{ .tag = .identifier, .str = "other_bool" },
-            } },
-            .{ .tag = .identifier, .str = "last_bool" },
+            .{ .tag = .string, .str = "\"world!\"" },
         } },
     });
 }
@@ -815,16 +863,14 @@ test "lte exp" {
     });
 }
 
-test "group exp" {
-    const src = "(a + b + c)";
+test "for exp" {
+    const src = "for list => it + 1";
     try expectAst(src, &.{
-        .{ .tag = .group_exp, .children = &.{
+        .{ .tag = .for_exp, .children = &.{
+            .{ .tag = .identifier, .str = "list" },
             .{ .tag = .add_exp, .children = &.{
-                .{ .tag = .add_exp, .children = &.{
-                    .{ .tag = .identifier, .str = "a" },
-                    .{ .tag = .identifier, .str = "b" },
-                } },
-                .{ .tag = .identifier, .str = "c" },
+                .{ .tag = .identifier, .str = "it" },
+                .{ .tag = .num_decimal, .str = "1" },
             } },
         } },
     });
@@ -845,15 +891,40 @@ test "if exp" {
     });
 }
 
-test "str add exp" {
-    const src = "\"Hello\" + \" \" + \"world!\"";
+test "boolean exp" {
+    const src = "some_bool and other_bool or last_bool";
     try expectAst(src, &.{
-        .{ .tag = .add_exp, .children = &.{
-            .{ .tag = .add_exp, .children = &.{
-                .{ .tag = .string, .str = "\"Hello\"" },
-                .{ .tag = .string, .str = "\" \"" },
+        .{ .tag = .or_exp, .children = &.{
+            .{ .tag = .and_exp, .children = &.{
+                .{ .tag = .identifier, .str = "some_bool" },
+                .{ .tag = .identifier, .str = "other_bool" },
             } },
-            .{ .tag = .string, .str = "\"world!\"" },
+            .{ .tag = .identifier, .str = "last_bool" },
+        } },
+    });
+}
+
+test "assign exp" {
+    const src = "a = b";
+    try expectAst(src, &.{
+        .{ .tag = .assign_exp, .str = "=", .children = &.{
+            .{ .tag = .identifier, .str = "a" },
+            .{ .tag = .identifier, .str = "b" },
+        } },
+    });
+}
+
+test "group exp" {
+    const src = "(a + b + c)";
+    try expectAst(src, &.{
+        .{ .tag = .group_exp, .children = &.{
+            .{ .tag = .add_exp, .children = &.{
+                .{ .tag = .add_exp, .children = &.{
+                    .{ .tag = .identifier, .str = "a" },
+                    .{ .tag = .identifier, .str = "b" },
+                } },
+                .{ .tag = .identifier, .str = "c" },
+            } },
         } },
     });
 }
@@ -870,6 +941,87 @@ test "struct init" {
             .{ .tag = .struct_field_init, .children = &.{
                 .{ .tag = .identifier, .str = "field" },
                 .{ .tag = .string, .str = "\"str\"" },
+            } },
+        } },
+    });
+}
+
+test "field_access" {
+    const src = "value.field.field";
+    try expectAst(src, &.{
+        .{ .tag = .field_access, .children = &.{
+            .{ .tag = .field_access, .children = &.{
+                .{ .tag = .identifier, .str = "value" },
+                .{ .tag = .identifier, .str = "field" },
+            } },
+            .{ .tag = .identifier, .str = "field" },
+        } },
+    });
+}
+
+test "array access" {
+    const src = "value[0][1]";
+    try expectAst(src, &.{
+        .{ .tag = .array_access, .children = &.{
+            .{ .tag = .array_access, .children = &.{
+                .{ .tag = .identifier, .str = "value" },
+                .{ .tag = .num_decimal, .str = "0" },
+            } },
+            .{ .tag = .num_decimal, .str = "1" },
+        } },
+    });
+}
+
+test "enum literal" {
+    const src = ".field";
+    try expectAst(src, &.{
+        .{ .tag = .enum_literal, .str = ".", .children = &.{
+            .{ .tag = .identifier, .str = "field" },
+        } },
+    });
+}
+
+test "struct exp" {
+    const src = "struct { field: bool, field: str, }";
+    try expectAst(src, &.{
+        .{ .tag = .struct_exp, .children = &.{
+            .{ .tag = .struct_field, .children = &.{
+                .{ .tag = .identifier, .str = "field" },
+                .{ .tag = .type_ident, .str = "bool" },
+            } },
+            .{ .tag = .struct_field, .children = &.{
+                .{ .tag = .identifier, .str = "field" },
+                .{ .tag = .type_ident, .str = "str" },
+            } },
+        } },
+    });
+}
+
+test "enum exp" {
+    const src = "enum { field, field, }";
+    try expectAst(src, &.{
+        .{ .tag = .enum_exp, .children = &.{
+            .{ .tag = .enum_field, .children = &.{
+                .{ .tag = .identifier, .str = "field" },
+            } },
+            .{ .tag = .enum_field, .children = &.{
+                .{ .tag = .identifier, .str = "field" },
+            } },
+        } },
+    });
+}
+
+test "union exp" {
+    const src = "union { field: str, field: void, }";
+    try expectAst(src, &.{
+        .{ .tag = .union_exp, .children = &.{
+            .{ .tag = .struct_field, .children = &.{
+                .{ .tag = .identifier, .str = "field" },
+                .{ .tag = .type_ident, .str = "str" },
+            } },
+            .{ .tag = .struct_field, .children = &.{
+                .{ .tag = .identifier, .str = "field" },
+                .{ .tag = .type_ident, .str = "void" },
             } },
         } },
     });
@@ -927,6 +1079,178 @@ test "ui exp" {
                 .{ .tag = .struct_field_init, .children = &.{
                     .{ .tag = .identifier, .str = "child" },
                     .{ .tag = .identifier, .str = "child" },
+                } },
+            } },
+        } },
+    });
+}
+
+test "const decl" {
+    const src = "decl :: value";
+    try expectAst(src, &.{
+        .{ .tag = .decl, .children = &.{
+            .{ .tag = .identifier, .str = "decl" },
+            .{ .tag = .decl_mut_const },
+            .{ .tag = .identifier, .str = "value" },
+        } },
+    });
+}
+
+test "pub const decl" {
+    const src = "pub decl :: value";
+    try expectAst(src, &.{
+        .{ .tag = .decl, .children = &.{
+            .{ .tag = .decl_vis_pub },
+            .{ .tag = .identifier, .str = "decl" },
+            .{ .tag = .decl_mut_const },
+            .{ .tag = .identifier, .str = "value" },
+        } },
+    });
+}
+
+test "var decl" {
+    const src = "decl := value";
+    try expectAst(src, &.{
+        .{ .tag = .decl, .children = &.{
+            .{ .tag = .identifier, .str = "decl" },
+            .{ .tag = .decl_mut_var },
+            .{ .tag = .identifier, .str = "value" },
+        } },
+    });
+}
+
+test "pub var decl" {
+    const src = "pub decl := value";
+    try expectAst(src, &.{
+        .{ .tag = .decl, .children = &.{
+            .{ .tag = .decl_vis_pub },
+            .{ .tag = .identifier, .str = "decl" },
+            .{ .tag = .decl_mut_var },
+            .{ .tag = .identifier, .str = "value" },
+        } },
+    });
+}
+
+test "decl ident type" {
+    const src = "decl: Type : value";
+    try expectAst(src, &.{
+        .{ .tag = .decl, .children = &.{
+            .{ .tag = .identifier, .str = "decl" },
+            .{ .tag = .type_ident, .str = "Type" },
+            .{ .tag = .decl_mut_const },
+            .{ .tag = .identifier, .str = "value" },
+        } },
+    });
+}
+
+test "decl builtin type" {
+    const src = "decl: @Builtin : value";
+    try expectAst(src, &.{
+        .{ .tag = .decl, .children = &.{
+            .{ .tag = .identifier, .str = "decl" },
+            .{ .tag = .type_builtin, .str = "@Builtin" },
+            .{ .tag = .decl_mut_const },
+            .{ .tag = .identifier, .str = "value" },
+        } },
+    });
+}
+
+test "decl list type" {
+    const src = "decl: [Type] : value";
+    try expectAst(src, &.{
+        .{ .tag = .decl, .children = &.{
+            .{ .tag = .identifier, .str = "decl" },
+            .{ .tag = .type_list, .children = &.{
+                .{ .tag = .type_ident, .str = "Type" },
+            } },
+            .{ .tag = .decl_mut_const },
+            .{ .tag = .identifier, .str = "value" },
+        } },
+    });
+}
+
+test "decl array type" {
+    const src = "decl: [10: Type] : value";
+    try expectAst(src, &.{
+        .{ .tag = .decl, .children = &.{
+            .{ .tag = .identifier, .str = "decl" },
+            .{ .tag = .type_array, .children = &.{
+                .{ .tag = .num_decimal, .str = "10" },
+                .{ .tag = .type_ident, .str = "Type" },
+            } },
+            .{ .tag = .decl_mut_const },
+            .{ .tag = .identifier, .str = "value" },
+        } },
+    });
+}
+
+test "decl map type" {
+    const src = "decl: [Key: Value] : value";
+    try expectAst(src, &.{
+        .{ .tag = .decl, .children = &.{
+            .{ .tag = .identifier, .str = "decl" },
+            .{ .tag = .type_map, .children = &.{
+                .{ .tag = .type_ident, .str = "Key" },
+                .{ .tag = .type_ident, .str = "Value" },
+            } },
+            .{ .tag = .decl_mut_const },
+            .{ .tag = .identifier, .str = "value" },
+        } },
+    });
+}
+
+test "multiple decls" {
+    const src =
+        "decl_one :: value_one\n" ++
+        "decl_two :: value_two";
+    try expectAst(src, &.{
+        .{ .tag = .decl, .children = &.{
+            .{ .tag = .identifier, .str = "decl_one" },
+            .{ .tag = .decl_mut_const },
+            .{ .tag = .identifier, .str = "value_one" },
+        } },
+        .{ .tag = .decl, .children = &.{
+            .{ .tag = .identifier, .str = "decl_two" },
+            .{ .tag = .decl_mut_const },
+            .{ .tag = .identifier, .str = "value_two" },
+        } },
+    });
+}
+
+test "multiple type decls" {
+    const src =
+        "pub Object :: obj(test.Scheme) {\n" ++
+        "    field: str,\n" ++
+        "}\n" ++
+        "\n" ++
+        "pub Command :: cmd {\n" ++
+        "    object: Object,\n" ++
+        "}\n";
+
+    try expectAst(src, &.{
+        .{ .tag = .decl, .children = &.{
+            .{ .tag = .decl_vis_pub },
+            .{ .tag = .identifier, .str = "Object" },
+            .{ .tag = .decl_mut_const },
+            .{ .tag = .obj_exp, .children = &.{
+                .{ .tag = .obj_scheme, .children = &.{
+                    .{ .tag = .identifier, .str = "test" },
+                    .{ .tag = .identifier, .str = "Scheme" },
+                } },
+                .{ .tag = .struct_field, .children = &.{
+                    .{ .tag = .identifier, .str = "field" },
+                    .{ .tag = .type_ident, .str = "str" },
+                } },
+            } },
+        } },
+        .{ .tag = .decl, .children = &.{
+            .{ .tag = .decl_vis_pub },
+            .{ .tag = .identifier, .str = "Command" },
+            .{ .tag = .decl_mut_const },
+            .{ .tag = .cmd_exp, .children = &.{
+                .{ .tag = .struct_field, .children = &.{
+                    .{ .tag = .identifier, .str = "object" },
+                    .{ .tag = .type_ident, .str = "Object" },
                 } },
             } },
         } },
