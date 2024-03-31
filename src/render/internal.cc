@@ -49,6 +49,14 @@ D2D1_ROUNDED_RECT rrectToD2D(RRect rr) {
     return rrect;
 }
 
+D2D1_ELLIPSE ovalToD2D(Oval o) {
+    D2D1_ELLIPSE oval;
+    oval.point = offsetToD2D(o.offset);
+    oval.radiusX = o.rx;
+    oval.radiusY = o.ry;
+    return oval;
+}
+
 ID2D1SolidColorBrush* createFillBrush(Object* obj, Color color) {
     D2D1_COLOR_F brush_color = colorToD2D(color);
 

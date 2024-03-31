@@ -45,6 +45,8 @@ D2D1_RECT_F rectToD2D(Rect r);
 
 D2D1_ROUNDED_RECT rrectToD2D(RRect rr);
 
+D2D1_ELLIPSE ovalToD2D(Oval o);
+
 ID2D1SolidColorBrush* createFillBrush(Object* obj, Color color);
 
 #ifdef __cplusplus

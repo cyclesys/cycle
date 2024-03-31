@@ -31,6 +31,12 @@ typedef struct RRect {
     f32 ry;
 } RRect;
 
+typedef struct Oval {
+    Offset offset;
+    f32 rx;
+    f32 ry;
+} Oval;
+
 typedef struct Context Context;
 
 typedef struct Window Window;
@@ -66,6 +72,8 @@ bool endDraw(Object* obj);
 void drawRect(Object* obj, Rect rect, Color color);
 
 void drawRRect(Object* obj, RRect rrect, Color color);
+
+void drawOval(Object* obj, Oval oval, Color color);
 
 void drawText(Object* obj, Text* text, Offset offset);
 

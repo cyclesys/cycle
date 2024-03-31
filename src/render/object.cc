@@ -40,6 +40,12 @@ void drawRRect(Object* obj, RRect rrect, Color color) {
     RELEASE(color_brush);
 }
 
+void drawOval(Object* obj, Oval oval, Color color) {
+    auto color_brush = createFillBrush(obj, color);
+    obj->target->DrawEllipse(ovalToD2D(oval), color_brush);
+    RELEASE(color_brush);
+}
+
 void drawText(Object* obj, Text* text, Offset offset) {
     auto fill_brush = createFillBrush(obj, 0xFF);
     obj->target->DrawTextLayout(
