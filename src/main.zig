@@ -106,5 +106,6 @@ fn onScroll(window: glfw.Window, xoffset: f64, yoffset: f64) void {
 }
 
 test {
+    _ = @import("Store/RawList.zig");
     _ = @import("Type/define.zig");
 }
