@@ -25,7 +25,7 @@ pub fn GenList(comptime V: type) type {
         const Self = @This();
 
         pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
-            self.entries.deinit(allocator);
+            self.list.deinit(allocator);
         }
 
         pub fn get(self: *Self, id: Id) ?V {
@@ -36,9 +36,9 @@ pub fn GenList(comptime V: type) type {
         }
 
         pub fn contains(self: *Self, id: Id) bool {
-            return id.index < self.entries.len and
-                self.tag[id.index] == .occupied and
-                self.data[id.index].occupied.generation == id.generation;
+            return id.index < self.list.items.len and
+                self.list.items[id.index] == .occupied and
+                self.list.items[id.index].occupied.generation == id.generation;
         }
 
         pub fn put(self: *Self, allocator: std.mem.Allocator, value: V) !Id {
@@ -59,8 +59,8 @@ pub fn GenList(comptime V: type) type {
                 };
             }
 
-            const index = self.list.len;
-            try self.entries.append(allocator, Item{
+            const index = self.list.items.len;
+            try self.list.append(allocator, Item{
                 .occupied = .{
                     .generation = 0,
                     .value = value,
@@ -69,7 +69,7 @@ pub fn GenList(comptime V: type) type {
 
             return Id{
                 .generation = 0,
-                .index = index,
+                .index = @intCast(index),
             };
         }
 
@@ -87,4 +87,43 @@ pub fn GenList(comptime V: type) type {
             return null;
         }
     };
+}
+
+test "basic put" {
+    const allocator = std.testing.allocator;
+    var list = GenList(u32){};
+    defer list.deinit(allocator);
+
+    const id = try list.put(allocator, 123);
+    try std.testing.expectEqual(@as(?u32, 123), list.get(id));
+}
+
+test "basic remove" {
+    const allocator = std.testing.allocator;
+    var list = GenList(u32){};
+    defer list.deinit(allocator);
+
+    const id = try list.put(allocator, 123);
+    const removed = list.remove(id);
+    try std.testing.expectEqual(@as(?u32, 123), removed);
+    try std.testing.expectEqual(@as(?u32, null), list.get(id));
+}
+
+test "recycles indices" {
+    const allocator = std.testing.allocator;
+    var list = GenList(u32){};
+    defer list.deinit(allocator);
+
+    _ = try list.put(allocator, 123);
+    const old_two = try list.put(allocator, 456);
+    _ = try list.put(allocator, 789);
+    const old_four = try list.put(allocator, 123);
+    _ = try list.put(allocator, 456);
+
+    _ = list.remove(old_two);
+    _ = list.remove(old_four);
+    const new_four = try list.put(allocator, 456);
+    const new_two = try list.put(allocator, 123);
+    try std.testing.expectEqual(new_four.index, old_four.index);
+    try std.testing.expectEqual(new_two.index, old_two.index);
 }
