@@ -3,7 +3,7 @@ data: []const Data,
 tree: []const Tree,
 
 const std = @import("std");
-const gen_list = @import("Store/gen_list.zig");
+const gen_list = @import("gen_list.zig");
 const Type = @import("Type.zig");
 
 pub const Data = struct {
