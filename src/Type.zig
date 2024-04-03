@@ -31,8 +31,8 @@ pub const Tag = enum {
     ref,
 
     opt,
-    list,
     array,
+    list,
     map,
 
     @"struct",
@@ -58,11 +58,11 @@ const Node = struct {
 };
 const IdentList = std.ArrayListUnmanaged(u8);
 
-pub fn deinit(ty: *Type, allocator: std.mem.Allocator) void {
-    allocator.free(ty.tag);
-    allocator.free(ty.data);
-    allocator.free(ty.ident);
-    ty.* = undefined;
+pub fn deinit(self: *Type, allocator: std.mem.Allocator) void {
+    allocator.free(self.tag);
+    allocator.free(self.data);
+    allocator.free(self.ident);
+    self.* = undefined;
 }
 
 /// Functionaity for defining Cycle types using Zig.
@@ -214,7 +214,6 @@ pub const zig = struct {
 
                 if (info.is_tuple) {
                     const node = try appendNode(s, .tuple);
-                    setLhs(s, node, 0);
 
                     var tail: Index = 0;
                     inline for (info.fields) |field| {
@@ -225,20 +224,14 @@ pub const zig = struct {
                         const field_node = try appendNode(s, .field);
                         setLhs(s, field_node, try appendType(s, field.type));
                         setRhs(s, field_node, 0);
-
-                        if (tail != 0) {
-                            setRhs(s, tail, field_node);
-                        } else {
-                            setLhs(s, node, field_node);
-                        }
-
+                        appendChild(s, node, tail, field_node);
                         tail = field_node;
                     }
+
                     return node;
                 }
 
                 const node = try appendNode(s, .@"struct");
-                setLhs(s, node, 0);
 
                 var tail: Index = 0;
                 inline for (info.fields) |field| {
@@ -253,40 +246,46 @@ pub const zig = struct {
                     setLhs(s, field_ident, try appendType(s, field.type));
 
                     setLhs(s, field_node, field_ident);
-                    if (tail != 0) {
-                        setRhs(s, tail, field_node);
-                    } else {
-                        setLhs(s, node, field_node);
-                    }
-
+                    appendChild(s, node, tail, field_node);
                     tail = field_node;
                 }
+
                 return node;
             },
             .Enum => |info| {
                 const node = try appendNode(s, .@"enum");
-                setLhs(s, node, 0);
+
+                // give the tag a uniform size and alignment.
+                const EnumTag = std.meta.Int(.unsigned, @sizeOf(info.tag_type) * 8);
+                setRhs(s, node, try appendType(s, EnumTag));
 
                 var tail: Index = 0;
                 inline for (info.fields) |field| {
                     const field_node = try appendNode(s, .field);
                     setLhs(s, field_node, try appendIdent(s, field.name));
                     setRhs(s, field_node, 0);
-
-                    if (tail != 0) {
-                        setRhs(s, tail, field_node);
-                    } else {
-                        setLhs(s, node, field_node);
-                    }
+                    appendChild(s, node, tail, field_node);
                     tail = field_node;
                 }
+
                 return node;
             },
             .Union => |info| {
                 const node = try appendNode(s, .@"union");
-                setLhs(s, node, 0);
 
-                setRhs(s, node, @intFromBool(info.tag_type != null));
+                if (info.tag_type) |tag_type| {
+                    const tag_info = @typeInfo(tag_type).Enum;
+
+                    // union tag types can be zero-sized if the union only has one field.
+                    const UnionTag = if (@sizeOf(tag_info.tag_type) == 0)
+                        // union tags must be at least 1 byte
+                        u8
+                    else
+                        // give the tag a uniform size and alignment
+                        std.meta.Int(.unsigned, @sizeOf(tag_info.tag_type) * 8);
+
+                    setRhs(s, node, try appendType(s, UnionTag));
+                }
 
                 var tail: Index = 0;
                 inline for (info.fields) |field| {
@@ -297,11 +296,7 @@ pub const zig = struct {
                     setLhs(s, field_ident, try appendType(s, field.type));
 
                     setLhs(s, field_node, field_ident);
-                    if (tail != 0) {
-                        setRhs(s, tail, field_node);
-                    } else {
-                        setLhs(s, node, field_node);
-                    }
+                    appendChild(s, node, tail, field_node);
                     tail = field_node;
                 }
                 return node;
@@ -324,9 +319,20 @@ pub const zig = struct {
         const index: Index = @intCast(s.nodes.len);
         try s.nodes.append(s.allocator, Node{
             .tag = tag,
-            .data = undefined,
+            .data = Data{
+                .lhs = 0,
+                .rhs = 0,
+            },
         });
         return index;
+    }
+
+    inline fn appendChild(s: *const InitState, node: Index, tail: Index, child: Index) void {
+        if (tail == 0) {
+            setLhs(s, node, child);
+        } else {
+            setRhs(s, tail, child);
+        }
     }
 
     inline fn setLhs(s: *const InitState, index: Index, lhs: u32) void {
@@ -488,10 +494,11 @@ pub const zig = struct {
                     },
                 },
             },
+            .rhs_child = &.{ .tag = .u8 },
         });
     }
 
-    test "init union" {
+    test "init untagged union" {
         try expectType(union {
             field0: u32,
             field1: Str,
@@ -528,24 +535,25 @@ pub const zig = struct {
                     },
                 },
             },
-            .rhs_value = @intFromBool(false),
+            .rhs_value = 0,
         });
     }
 
     test "init tagged union" {
         try expectType(union(enum) {
-            field0: void,
+            field0: u8,
+            field2: u8,
         }, .{
             .tag = .@"union",
             .lhs_child = &.{
                 .tag = .field,
                 .lhs_child = &.{
                     .tag = .ident,
-                    .lhs_child = &.{ .tag = .void },
+                    .lhs_child = &.{ .tag = .u8 },
                     .rhs_ident = "field0",
                 },
             },
-            .rhs_value = @intFromBool(true),
+            .rhs_child = &.{ .tag = .u8 },
         });
     }
 
@@ -668,7 +676,7 @@ pub const zig = struct {
                                     .rhs_ident = "field0",
                                 },
                             },
-                            .rhs_value = @intFromBool(false),
+                            .rhs_value = 0,
                         },
                         .rhs_ident = "field3",
                     },
@@ -691,7 +699,7 @@ pub const zig = struct {
                                     .rhs_ident = "field0",
                                 },
                             },
-                            .rhs_value = @intFromBool(true),
+                            .rhs_child = &.{ .tag = .u8 },
                         },
                         .rhs_ident = "field4",
                     },
