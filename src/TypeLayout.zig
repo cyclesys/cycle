@@ -380,14 +380,14 @@ test "fixed layouts" {
     try expectLayout(u128, .{ .size = 16, .alignment = 16 });
     try expectLayout(f128, .{ .size = 16, .alignment = 16 });
 
-    try expectLayout(Type.zig.Ref, .{ .size = @sizeOf(gen_list.Id), .alignment = @alignOf(gen_list.Id) });
-    try expectLayout(Type.zig.Str, .{ .size = @sizeOf(*anyopaque), .alignment = @alignOf(*anyopaque) });
-    try expectLayout(Type.zig.List(u8), .{
+    try expectLayout(zig.Ref, .{ .size = @sizeOf(gen_list.Id), .alignment = @alignOf(gen_list.Id) });
+    try expectLayout(zig.Str, .{ .size = @sizeOf(*anyopaque), .alignment = @alignOf(*anyopaque) });
+    try expectLayout(zig.List(u8), .{
         .size = @sizeOf(*anyopaque),
         .alignment = @alignOf(*anyopaque),
         .child = &.{ .size = 1, .alignment = 1 },
     });
-    try expectLayout(Type.zig.Map(u8, u8), .{
+    try expectLayout(zig.Map(u8, u8), .{
         .size = @sizeOf(*anyopaque),
         .alignment = @alignOf(*anyopaque),
         .children = &.{
@@ -630,6 +630,8 @@ test "tagged union with larger alignment tag than payload" {
     });
 }
 
+const zig = @import("zig.zig");
+
 const ExpectedNode = struct {
     size: u32,
     alignment: u8,
@@ -640,7 +642,7 @@ const ExpectedNode = struct {
 
 fn expectLayout(comptime T: type, root: ExpectedNode) !void {
     const allocator = std.testing.allocator;
-    var ty = try Type.zig.init(allocator, T);
+    var ty = try zig.initType(allocator, T);
     defer ty.deinit(allocator);
 
     var layout = try init(allocator, ty);
