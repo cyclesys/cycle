@@ -4,6 +4,7 @@ tree: []const Tree,
 
 const std = @import("std");
 const gen_list = @import("gen_list.zig");
+const raw = @import("raw.zig");
 const Type = @import("Type.zig");
 
 pub const Data = struct {
@@ -71,6 +72,8 @@ const SortField = struct {
         return lhs.alignment > rhs.alignment;
     }
 };
+
+const ListType = raw.List(16);
 
 fn appendLayout(s: *InitState, type_node: Type.Index) std.mem.Allocator.Error!Index {
     switch (s.ty.tag[type_node]) {
@@ -146,9 +149,9 @@ fn appendLayout(s: *InitState, type_node: Type.Index) std.mem.Allocator.Error!In
             return node;
         },
 
-        // Stored as a pointer type.
+        // Stored as a `raw.List`.
         .list => {
-            const node = try appendNode(s, @sizeOf(*anyopaque), @alignOf(*anyopaque));
+            const node = try appendNode(s, @sizeOf(ListType), @alignOf(ListType));
             const child = try appendLayout(s, s.ty.data[type_node].lhs);
             setHead(s, node, child);
             return node;
@@ -263,7 +266,7 @@ fn appendLayout(s: *InitState, type_node: Type.Index) std.mem.Allocator.Error!In
 fn appendStructLayout(
     s: *InitState,
     type_node: Type.Index,
-    fieldTypeNodeFn: *const fn (*InitState, Type.Index) Type.Index,
+    fieldTypeNodeFn: fn (*InitState, Type.Index) Type.Index,
 ) !Index {
     const node = try appendNode(s, 0, 0);
     var layout_tail: Index = 0;
@@ -373,8 +376,8 @@ test "fixed layouts" {
     try expectLayout(zig.Ref, .{ .size = @sizeOf(gen_list.Id), .alignment = @alignOf(gen_list.Id) });
     try expectLayout(zig.Str, .{ .size = @sizeOf(*anyopaque), .alignment = @alignOf(*anyopaque) });
     try expectLayout(zig.List(u8), .{
-        .size = @sizeOf(*anyopaque),
-        .alignment = @alignOf(*anyopaque),
+        .size = @sizeOf(ListType),
+        .alignment = @alignOf(ListType),
         .child = &.{ .size = 1, .alignment = 1 },
     });
 }

@@ -107,7 +107,7 @@ fn onScroll(window: glfw.Window, xoffset: f64, yoffset: f64) void {
 
 test {
     _ = @import("gen_list.zig");
+    _ = @import("raw.zig");
     _ = @import("zig.zig");
-    _ = @import("RawList.zig");
     _ = @import("TypeLayout.zig");
 }
