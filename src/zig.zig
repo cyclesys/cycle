@@ -7,7 +7,6 @@ const DefKind = enum {
     str,
     ref,
     list,
-    map,
 };
 
 /// Defines a Cycle string type.
@@ -21,19 +20,10 @@ pub const Ref = struct {
 };
 
 /// Defines a Cycle list type.
-pub fn List(comptime Child: type) type {
+pub fn List(comptime T: type) type {
     return struct {
         pub const def_kind = DefKind.list;
-        pub const child = Child;
-    };
-}
-
-/// Defines a Cycle map type.
-pub fn Map(comptime Key: type, comptime Value: type) type {
-    return struct {
-        pub const def_kind = DefKind.map;
-        pub const key = Key;
-        pub const value = Value;
+        pub const child = T;
     };
 }
 
@@ -137,12 +127,6 @@ fn appendType(s: *InitType, comptime T: type) !Type.Index {
                     DefKind.list => {
                         const node = try appendNode(s, .list);
                         setLhs(s, node, try appendType(s, T.child));
-                        return node;
-                    },
-                    DefKind.map => {
-                        const node = try appendNode(s, .map);
-                        setLhs(s, node, try appendType(s, T.key));
-                        setRhs(s, node, try appendType(s, T.value));
                         return node;
                     },
                 }
@@ -326,14 +310,6 @@ test "init array" {
     });
 }
 
-test "init map" {
-    try expectType(Map(u32, u64), .{
-        .tag = .map,
-        .lhs_child = &.{ .tag = .u32 },
-        .rhs_child = &.{ .tag = .u64 },
-    });
-}
-
 test "init struct" {
     try expectType(struct {
         field0: i32,
@@ -438,7 +414,7 @@ test "init untagged union" {
     try expectType(union {
         field0: u32,
         field1: Str,
-        field2: Map(u32, Str),
+        field2: List(u32),
     }, .{
         .tag = .@"union",
         .lhs_children = &.{
@@ -463,9 +439,8 @@ test "init untagged union" {
                 .lhs_child = &.{
                     .tag = .ident,
                     .lhs_child = &.{
-                        .tag = .map,
+                        .tag = .list,
                         .lhs_child = &.{ .tag = .u32 },
-                        .rhs_child = &.{ .tag = .str },
                     },
                     .rhs_ident = "field2",
                 },
@@ -511,7 +486,7 @@ test "init complex type" {
             field0: List(u8),
         },
         field4: union(enum) {
-            field0: Map(u32, Ref),
+            field0: List(Ref),
         },
         field5: [3]struct {
             field0: ?Str,
@@ -628,9 +603,8 @@ test "init complex type" {
                             .lhs_child = &.{
                                 .tag = .ident,
                                 .lhs_child = &.{
-                                    .tag = .map,
-                                    .lhs_child = &.{ .tag = .u32 },
-                                    .rhs_child = &.{ .tag = .ref },
+                                    .tag = .list,
+                                    .lhs_child = &.{ .tag = .ref },
                                 },
                                 .rhs_ident = "field0",
                             },

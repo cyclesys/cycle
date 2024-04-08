@@ -154,16 +154,6 @@ fn appendLayout(s: *InitState, type_node: Type.Index) std.mem.Allocator.Error!In
             return node;
         },
 
-        // Stored as a pointer type.
-        .map => {
-            const node = try appendNode(s, @sizeOf(*anyopaque), @alignOf(*anyopaque));
-            const key = try appendLayout(s, s.ty.data[type_node].lhs);
-            setHead(s, node, key);
-            const value = try appendLayout(s, s.ty.data[type_node].rhs);
-            setNext(s, key, value);
-            return node;
-        },
-
         // Stored as an `extern struct { fields... }`.
         // Fields are reordered by alignment in descending order.
         .@"struct" => {
@@ -386,14 +376,6 @@ test "fixed layouts" {
         .size = @sizeOf(*anyopaque),
         .alignment = @alignOf(*anyopaque),
         .child = &.{ .size = 1, .alignment = 1 },
-    });
-    try expectLayout(zig.Map(u8, u8), .{
-        .size = @sizeOf(*anyopaque),
-        .alignment = @alignOf(*anyopaque),
-        .children = &.{
-            .{ .size = 1, .alignment = 1 },
-            .{ .size = 1, .alignment = 1 },
-        },
     });
 }
 

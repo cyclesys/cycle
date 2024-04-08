@@ -29,8 +29,8 @@ pub const Tag = enum {
 
     opt,
     array,
+
     list,
-    map,
 
     @"struct",
     tuple,
