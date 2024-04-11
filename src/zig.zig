@@ -1,7 +1,281 @@
 //! Functianality for interacting with the Cycle runtime using Zig.
-//! Used internally by the system module, and lang module.
 const std = @import("std");
+const raw = @import("raw.zig");
+const Store = @import("Store.zig");
 const Type = @import("Type.zig");
+
+pub fn LayoutType(comptime T: type) type {
+    switch (@typeInfo(T)) {
+        .Void, .Bool, .Int, .Float => {
+            return T;
+        },
+
+        .Optional => {
+            return LayoutOptional(T);
+        },
+
+        .Array => {
+            return LayoutArray(T);
+        },
+
+        .Struct => |info| {
+            if (@hasDecl(T, "def_kind")) {
+                switch (T.def_kind) {
+                    .str => {
+                        return raw.ByteList;
+                    },
+                    .ref => {
+                        return Store.Id;
+                    },
+                    .list => {
+                        return LayoutList(T);
+                    },
+                }
+            }
+
+            if (info.is_tuple) {
+                return LayoutTuple(T);
+            }
+
+            return LayoutStruct(T);
+        },
+
+        .Enum => {
+            return LayoutEnum(T);
+        },
+
+        .Union => {
+            return LayoutUnion(T);
+        },
+
+        else => @compileError("unsupported"),
+    }
+}
+
+pub fn LayoutOptional(comptime T: type) type {
+    const info = @typeInfo(T).Optional;
+    return extern struct {
+        value: LayoutType(info.child),
+        some: bool,
+    };
+}
+
+pub fn LayoutArray(comptime T: type) type {
+    const info = @typeInfo(T).Array;
+    return [info.len]LayoutType(info.child);
+}
+
+pub fn LayoutList(comptime T: type) type {
+    return extern struct {
+        inner: InnerList = .{
+            .item_size = @sizeOf(Child),
+        },
+
+        const InnerList = raw.List(@alignOf(Child));
+        pub const Child = LayoutType(T.child);
+        const Self = @This();
+
+        pub fn get(self: Self, i: u32) *Child {
+            const bytes = self.inner.get(i);
+            return @ptrCast(@alignCast(bytes));
+        }
+
+        pub fn getRange(self: Self, start: u32, len: u32) []Child {
+            const bytes = self.inner.getRange(start, len);
+            var slice: []Child = undefined;
+            slice.ptr = @ptrCast(@alignCast(bytes));
+            slice.len = len;
+            return slice;
+        }
+
+        pub fn append(self: *Self, allocator: std.mem.Allocator, child: Child) !void {
+            try self.inner.ensureAvailable(allocator, 1);
+            const bytes = self.inner.append();
+            const ptr: *Child = @ptrCast(@alignCast(bytes));
+            ptr.* = child;
+        }
+
+        pub fn appendRange(self: *Self, allocator: std.mem.allocator, children: []const Child) !void {
+            try self.inner.ensureAvailable(allocator, children.len);
+            const range = self.inner.appendRange(children.len);
+            setRange(range, children);
+        }
+
+        pub fn insert(self: *Self, allocator: std.mem.Allocator, i: InnerList.Index, child: Child) !void {
+            try self.inner.ensureAvailable(allocator, 1);
+            const bytes = self.inner.insert(i);
+            const ptr: *Child = @ptrCast(@alignCast(bytes));
+            ptr.* = child;
+        }
+
+        pub fn insertRange(self: *Self, allocator: std.mem.Allocator, i: InnerList.Index, children: []const Child) !void {
+            try self.inner.ensureAvailable(allocator, children.len);
+            const range = self.inner.insertRange(i, children.len);
+            setRange(range, children);
+        }
+
+        fn setRange(range: [*]u8, children: []const Child) void {
+            const stride = @sizeOf(Child);
+            for (0..children.len) |i| {
+                const bytes = range[i * stride ..][0..stride];
+                const ptr: *Child = @ptrCast(@alignCast(bytes));
+                ptr.* = children[i];
+            }
+        }
+
+        pub fn remove(self: *Self, i: InnerList.Index) !void {
+            self.inner.remove(i);
+        }
+
+        pub fn removeRange(self: *Self, start: InnerList.Index, len: InnerList.Index) void {
+            self.inner.removeRange(start, len);
+        }
+    };
+}
+
+pub fn LayoutTuple(comptime T: type) type {
+    const info = @typeInfo(T).Struct;
+    var fields: [info.fields.len]std.builtin.Type.StructField = undefined;
+    for (info.fields, 0..) |field, i| {
+        const FieldType = LayoutType(field.type);
+        fields[i] = .{
+            .name = tupleFieldName(i),
+            .type = FieldType,
+            .default_value = null,
+            .is_comptime = false,
+            .alignment = alignOf(FieldType),
+        };
+    }
+    comptime std.sort.insertion(std.builtin.Type.StructField, &fields, @as(void, undefined), alignSort);
+    return @Type(.{
+        .Struct = .{
+            .layout = .Extern,
+            .backing_integer = null,
+            .fields = &fields,
+            .decls = &.{},
+            .is_tuple = false,
+        },
+    });
+}
+
+pub fn LayoutStruct(comptime T: type) type {
+    const info = @typeInfo(T).Struct;
+    var fields: [info.fields.len]std.builtin.Type.StructField = undefined;
+    for (info.fields, 0..) |field, i| {
+        const FieldType = LayoutType(field.type);
+        fields[i] = .{
+            .name = field.name,
+            .type = FieldType,
+            .default_value = null,
+            .is_comptime = false,
+            .alignment = alignOf(FieldType),
+        };
+    }
+    comptime std.sort.insertion(std.builtin.Type.StructField, &fields, @as(void, undefined), alignSort);
+    return @Type(.{
+        .Struct = .{
+            .layout = .Extern,
+            .backing_integer = null,
+            .fields = &fields,
+            .decls = &.{},
+            .is_tuple = false,
+        },
+    });
+}
+
+pub fn LayoutEnum(comptime T: type) type {
+    const info = @typeInfo(T).Enum;
+    const EnumTag = std.meta.Int(.unsigned, @sizeOf(info.tag_type) * 8);
+    return @Type(.{
+        .Enum = .{
+            .tag_type = EnumTag,
+            .fields = info.fields,
+            .decls = &.{},
+            .is_exhaustive = true,
+        },
+    });
+}
+
+pub fn LayoutUnion(comptime T: type) type {
+    const info = @typeInfo(T).Union;
+
+    var union_fields: [info.fields.len]std.builtin.Type.UnionField = undefined;
+    for (info.fields, 0..) |field, i| {
+        const FieldType = LayoutType(field.type);
+        union_fields[i] = .{
+            .name = field.name,
+            .type = FieldType,
+            .alignment = alignOf(FieldType),
+        };
+    }
+
+    const Union = @Type(.{
+        .Union = .{
+            .layout = .Extern,
+            .tag_type = null,
+            .fields = &union_fields,
+            .decls = &.{},
+        },
+    });
+
+    if (info.tag_type == null) {
+        return Union;
+    }
+
+    const UnionTag = LayoutEnum(info.tag_type.?);
+    var struct_fields = [_]std.builtin.Type.StructField{
+        .{
+            .name = "value",
+            .type = Union,
+            .default_value = null,
+            .is_comptime = false,
+            .alignment = @alignOf(Union),
+        },
+        .{
+            .name = "tag",
+            .type = UnionTag,
+            .default_value = null,
+            .is_comptime = false,
+            .alignment = alignOf(UnionTag),
+        },
+    };
+    comptime std.sort.insertion(std.builtin.Type.StructField, &struct_fields, @as(void, undefined), alignSort);
+    return @Type(.{
+        .Struct = .{
+            .layout = .Extern,
+            .backing_integer = null,
+            .fields = &struct_fields,
+            .decls = &.{},
+            .is_tuple = false,
+        },
+    });
+}
+
+fn alignSort(_: void, comptime lhs: std.builtin.Type.StructField, comptime rhs: std.builtin.Type.StructField) bool {
+    return alignOf(lhs.type) > alignOf(rhs.type);
+}
+
+fn alignOf(comptime T: type) comptime_int {
+    comptime {
+        return switch (T) {
+            // zig aligns these as 8 normally, but we need them aligned as they are in `extern` types.
+            i128, u128, f128 => 16,
+            else => switch (@typeInfo(T)) {
+                .Enum => |info| alignOf(info.tag_type),
+                else => @alignOf(T),
+            },
+        };
+    }
+}
+
+fn tupleFieldName(comptime index: comptime_int) []const u8 {
+    comptime {
+        const buf_size = std.fmt.count("{d}", .{index});
+        var buf: [buf_size]u8 = undefined;
+        _ = std.fmt.formatIntBuf(&buf, index, 10, .upper, .{});
+        return &buf;
+    }
+}
 
 const DefKind = enum {
     str,
@@ -177,6 +451,9 @@ fn appendType(s: *InitType, comptime T: type) !Type.Index {
 
             // give the tag a uniform size and alignment.
             const EnumTag = std.meta.Int(.unsigned, @sizeOf(info.tag_type) * 8);
+            if (@sizeOf(EnumTag) > 16) {
+                @compileError("unsupported");
+            }
             setRhs(s, node, try appendType(s, EnumTag));
 
             var tail: Type.Index = 0;
@@ -203,6 +480,10 @@ fn appendType(s: *InitType, comptime T: type) !Type.Index {
                 else
                     // give the tag a uniform size and alignment
                     std.meta.Int(.unsigned, @sizeOf(tag_info.tag_type) * 8);
+
+                if (@sizeOf(UnionTag) > 16) {
+                    @compileError("unsupported");
+                }
 
                 setRhs(s, node, try appendType(s, UnionTag));
             }

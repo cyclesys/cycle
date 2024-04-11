@@ -1,5 +1,11 @@
 const std = @import("std");
 
+pub const ByteList = extern struct {
+    buf: [*]u8 = undefined,
+    len: u32,
+    capacity: u32 = 0,
+};
+
 /// A contigious growable list of items with a runtime known size.
 // This is essentially a `std.ArrayList` adjusted for dynamically sized items.
 pub fn List(comptime alignment: comptime_int) type {
@@ -7,7 +13,7 @@ pub fn List(comptime alignment: comptime_int) type {
     return extern struct {
         bytes: [*]u8 = undefined,
         len: Index = 0,
-        capacity: Index = 0,
+        available: Index = 0,
         item_size: Index,
 
         pub const Index = u32;
@@ -17,19 +23,24 @@ pub fn List(comptime alignment: comptime_int) type {
         const max_capacity = std.math.maxInt(Index);
         const Self = @This();
 
+        inline fn capacity(self: Self) u32 {
+            return self.len + self.available;
+        }
+
         pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
-            if (self.capacity != 0) {
-                const byte_count = self.capacity * self.item_size;
+            const cap = self.capacity();
+            if (cap != 0) {
+                const byte_count = cap * self.item_size;
                 rawFree(allocator, self.bytes[0..byte_count], alignment);
             }
             self.* = undefined;
         }
 
-        pub inline fn get(self: Self, i: u32) [*]u8 {
+        pub inline fn get(self: Self, i: Index) [*]u8 {
             return self.getRange(i, 1);
         }
 
-        pub fn getRange(self: Self, start: u32, len: u32) [*]u8 {
+        pub fn getRange(self: Self, start: Index, len: Index) [*]u8 {
             return self.bytes[start * self.item_size ..][0 .. len * self.item_size].ptr;
         }
 
@@ -37,17 +48,18 @@ pub fn List(comptime alignment: comptime_int) type {
             return self.appendRange(1);
         }
 
-        pub fn appendRange(self: *Self, len: u32) [*]u8 {
+        pub fn appendRange(self: *Self, len: Index) [*]u8 {
             const items = self.getRange(self.len, len);
             self.len += len;
+            self.available -= len;
             return items;
         }
 
-        pub inline fn insert(self: *Self, i: u32) [*]u8 {
+        pub inline fn insert(self: *Self, i: Index) [*]u8 {
             return self.insertRange(i, 1);
         }
 
-        pub fn insertRange(self: *Self, i: u32, len: u32) [*]u8 {
+        pub fn insertRange(self: *Self, i: Index, len: Index) [*]u8 {
             const dest_start = (i + len) * self.item_size;
             const dest_end = dest_start + (len * self.item_size);
             const src_start = i * self.item_size;
@@ -58,14 +70,15 @@ pub fn List(comptime alignment: comptime_int) type {
                 self.bytes[src_start..src_end],
             );
             self.len += len;
+            self.available -= len;
             return self.getRange(i, len);
         }
 
-        pub inline fn remove(self: *Self, i: u32) void {
+        pub inline fn remove(self: *Self, i: Index) void {
             self.removeRange(i, 1);
         }
 
-        pub fn removeRange(self: *Self, start: u32, len: u32) void {
+        pub fn removeRange(self: *Self, start: Index, len: Index) void {
             const dest_start = start * self.item_size;
             const dest_end = dest_start + (len * self.item_size);
             const src_start = (start + len) * self.item_size;
@@ -76,21 +89,38 @@ pub fn List(comptime alignment: comptime_int) type {
                 self.bytes[src_start..src_end],
             );
             self.len -= len;
+            self.available += len;
         }
 
-        pub fn resize(self: *Self, allocator: std.mem.Allocator, new_capacity: u32) Error!void {
+        pub fn ensureAvailable(self: *Self, allocator: std.mem.Allocator, necessary: Index) !void {
+            if (self.available < necessary) {
+                const necessary_capacity = self.len + necessary;
+                if (necessary_capacity > max_capacity) {
+                    return error.OutOfCapacity;
+                }
+
+                var new_capacity = @max(self.capacity(), 8);
+                while (new_capacity < necessary_capacity) {
+                    new_capacity +|= new_capacity / 4 + 8;
+                }
+
+                try self.resize(allocator, new_capacity);
+            }
+        }
+
+        pub fn resize(self: *Self, allocator: std.mem.Allocator, new_capacity: Index) Error!void {
             const new_byte_count = new_capacity * self.item_size;
-            if (self.capacity == 0) {
+            if (self.capacity() == 0) {
                 self.bytes = try rawAlloc(allocator, new_byte_count, alignment);
-                self.capacity = new_capacity;
+                self.available = new_capacity;
                 @memset(self.bytes[0..new_byte_count], undefined);
                 return;
             }
 
-            const old_byte_count = self.capacity * self.item_size;
+            const old_byte_count = self.capacity() * self.item_size;
             const old_memory = self.bytes[0..old_byte_count];
             if (rawResize(allocator, old_memory, new_byte_count, alignment)) {
-                self.capacity = new_capacity;
+                self.available = new_capacity - self.len;
                 return;
             }
             defer rawFree(allocator, old_memory, alignment);
@@ -99,7 +129,7 @@ pub fn List(comptime alignment: comptime_int) type {
             @memcpy(new_memory[0..self.len], old_memory);
             @memset(new_memory[self.len..new_byte_count], undefined);
             self.bytes = new_memory;
-            self.capacity = new_capacity;
+            self.available = new_capacity - self.len;
         }
     };
 }
@@ -125,7 +155,7 @@ test "list initial resize" {
     defer list.deinit(allocator);
 
     try list.resize(allocator, 8);
-    try std.testing.expectEqual(@as(u32, 8), list.capacity);
+    try std.testing.expectEqual(@as(u32, 8), list.capacity());
 }
 
 test "list appendRange" {
@@ -178,11 +208,11 @@ test "list grow" {
     defer list.deinit(allocator);
 
     try list.resize(allocator, 8);
-    try std.testing.expectEqual(@as(u32, 8), list.capacity);
+    try std.testing.expectEqual(@as(u32, 8), list.capacity());
     writeTestItem(list, 4, .{ .f1 = 11, .f2 = 22 });
 
     try list.resize(allocator, 16);
-    try std.testing.expectEqual(@as(u32, 16), list.capacity);
+    try std.testing.expectEqual(@as(u32, 16), list.capacity());
     try expectListItem(list, 4, .{ .f1 = 11, .f2 = 22 });
 }
 
@@ -192,11 +222,11 @@ test "list shrink" {
     defer list.deinit(allocator);
 
     try list.resize(allocator, 16);
-    try std.testing.expectEqual(@as(u32, 16), list.capacity);
+    try std.testing.expectEqual(@as(u32, 16), list.capacity());
     writeTestItem(list, 7, .{ .f1 = 11, .f2 = 22 });
 
     try list.resize(allocator, 8);
-    try std.testing.expectEqual(@as(u32, 8), list.capacity);
+    try std.testing.expectEqual(@as(u32, 8), list.capacity());
     try expectListItem(list, 7, .{ .f1 = 11, .f2 = 22 });
 }
 

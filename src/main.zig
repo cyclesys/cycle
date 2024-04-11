@@ -1,10 +1,7 @@
 const std = @import("std");
 const glfw = @import("glfw");
-const UiRoot = @import("UiRoot.zig");
 
-const Context = struct {
-    ui_root: UiRoot,
-};
+const Context = struct {};
 
 pub fn main() !void {
     glfw.setErrorCallback(onError);

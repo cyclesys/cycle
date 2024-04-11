@@ -3,8 +3,8 @@ data: []const Data,
 tree: []const Tree,
 
 const std = @import("std");
-const gen_list = @import("gen_list.zig");
 const raw = @import("raw.zig");
+const Store = @import("Store.zig");
 const Type = @import("Type.zig");
 
 pub const Data = struct {
@@ -54,6 +54,11 @@ pub fn deinit(self: *TypeLayout, allocator: std.mem.Allocator) void {
     allocator.free(self.data);
     allocator.free(self.tree);
     self.* = undefined;
+}
+
+pub fn create(self: TypeLayout, allocator: std.mem.Allocator) std.mem.Allocator.Error![*]u8 {
+    const data = self.data[0];
+    return allocator.rawAlloc(data.size, data.alignment, @returnAddress()) orelse return error.OutOfMemory;
 }
 
 const InitState = struct {
@@ -107,14 +112,14 @@ fn appendLayout(s: *InitState, type_node: Type.Index) std.mem.Allocator.Error!In
             return try appendNode(s, 16, 16);
         },
 
-        // Stored as a pointer type.
+        // Stored as an `std.ArrayListUnmanaged(u8)`.
         .str => {
-            return try appendNode(s, @sizeOf(*anyopaque), @alignOf(*anyopaque));
+            return try appendNode(s, @sizeOf(raw.ByteList), @alignOf(raw.ByteList));
         },
 
-        // Stored as a `gen_list.Id` type.
+        // Stored as a `Store.Id` type.
         .ref => {
-            return try appendNode(s, @sizeOf(gen_list.Id), @alignOf(gen_list.Id));
+            return try appendNode(s, @sizeOf(Store.Id), @alignOf(Store.Id));
         },
 
         // Stored as an `extern struct {
@@ -373,8 +378,8 @@ test "fixed layouts" {
     try expectLayout(u128, .{ .size = 16, .alignment = 16 });
     try expectLayout(f128, .{ .size = 16, .alignment = 16 });
 
-    try expectLayout(zig.Ref, .{ .size = @sizeOf(gen_list.Id), .alignment = @alignOf(gen_list.Id) });
-    try expectLayout(zig.Str, .{ .size = @sizeOf(*anyopaque), .alignment = @alignOf(*anyopaque) });
+    try expectLayout(zig.Ref, .{ .size = @sizeOf(Store.Id), .alignment = @alignOf(Store.Id) });
+    try expectLayout(zig.Str, .{ .size = @sizeOf(raw.ByteList), .alignment = @alignOf(raw.ByteList) });
     try expectLayout(zig.List(u8), .{
         .size = @sizeOf(ListType),
         .alignment = @alignOf(ListType),
@@ -634,6 +639,7 @@ fn expectLayout(comptime T: type, root: ExpectedNode) !void {
     defer layout.deinit(allocator);
 
     try expectNode(layout, 0, root);
+    try expectZigLayout(T, layout);
 }
 
 fn expectNode(layout: TypeLayout, index: Index, expected: ExpectedNode) !void {
@@ -651,3 +657,83 @@ fn expectNode(layout: TypeLayout, index: Index, expected: ExpectedNode) !void {
         try std.testing.expectEqual(@as(Index, 0), tail);
     }
 }
+
+// This tests both the `TypeLayout` as well as the `zig.LayoutType` implementation.
+fn expectZigLayout(comptime T: type, layout: TypeLayout) !void {
+    const LayoutType = zig.LayoutType(T);
+    try expectZigNode(T, LayoutType, layout, 0);
+}
+
+fn expectZigNode(comptime T: type, comptime LT: type, layout: TypeLayout, node: Index) !void {
+    // skip void type
+    if (@sizeOf(LT) == 0) return;
+
+    // wrap T in an extern struct so that `i/u/f128`s get the proper alignment
+    const Actual = extern struct {
+        lt: LT,
+    };
+    try std.testing.expectEqual(layout.data[node].size, @sizeOf(Actual));
+    try std.testing.expectEqual(layout.data[node].alignment, @alignOf(Actual));
+
+    switch (@typeInfo(T)) {
+        .Void, .Bool, .Int, .Float, .Enum => {},
+        .Optional => |info| {
+            try expectZigNode(info.child, std.meta.FieldType(LT, .value), layout, layout.tree[node].head);
+        },
+        .Array => |info| {
+            try expectZigNode(info.child, std.meta.Child(LT), layout, layout.tree[node].head);
+        },
+        .Struct => |info| {
+            if (@hasDecl(T, "def_kind")) {
+                switch (T.def_kind) {
+                    .str, .ref => {},
+                    .list => {
+                        try expectZigNode(T.child, LT.Child, layout, layout.tree[node].head);
+                    },
+                }
+            }
+
+            var tail: Index = layout.tree[node].head;
+            inline for (info.fields) |field| {
+                const LTFieldType = FieldType(LT, field.name);
+                try expectZigNode(field.type, LTFieldType, layout, tail);
+
+                const actual = @offsetOf(LT, field.name);
+                try std.testing.expectEqual(layout.data[tail].offset, actual);
+
+                tail = layout.tree[tail].next;
+            }
+        },
+        .Union => |info| {
+            comptime var LTUnion = LT;
+            var tail: Index = layout.tree[node].head;
+            if (info.tag_type != null) {
+                try std.testing.expectEqual(layout.data[tail].offset, @offsetOf(LT, "tag"));
+                tail = layout.tree[tail].next;
+                try std.testing.expectEqual(layout.data[tail].offset, @offsetOf(LT, "value"));
+                LTUnion = std.meta.FieldType(LT, .value);
+            }
+
+            inline for (info.fields) |field| {
+                const LTFieldType = FieldType(LTUnion, field.name);
+                try expectZigNode(field.type, LTFieldType, layout, tail);
+                tail = layout.tree[tail].next;
+            }
+        },
+        else => @compileError("unsupported"),
+    }
+}
+
+fn FieldType(comptime T: type, comptime field_name: []const u8) type {
+    const field_index = std.meta.fieldIndex(T, field_name).?;
+    return std.meta.fields(T)[field_index].type;
+}
+
+const StructFieldNode = struct {
+    node: Index,
+    i: usize,
+
+    fn sort(layout: TypeLayout, lhs: StructFieldNode, rhs: StructFieldNode) bool {
+        return layout.data[lhs.node].offset < layout.data[rhs.node].offset;
+    }
+};
