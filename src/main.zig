@@ -106,5 +106,6 @@ test {
     _ = @import("gen_list.zig");
     _ = @import("raw.zig");
     _ = @import("zig.zig");
+    _ = @import("Type.zig");
     _ = @import("TypeLayout.zig");
 }

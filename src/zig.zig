@@ -417,7 +417,6 @@ fn appendType(s: *InitType, comptime T: type) !Type.Index {
 
                     const field_node = try appendNode(s, .field);
                     setLhs(s, field_node, try appendType(s, field.type));
-                    setRhs(s, field_node, 0);
                     appendChild(s, node, tail, field_node);
                     tail = field_node;
                 }
@@ -434,7 +433,6 @@ fn appendType(s: *InitType, comptime T: type) !Type.Index {
                 }
 
                 const field_node = try appendNode(s, .field);
-                setRhs(s, field_node, 0);
 
                 const field_ident = try appendIdent(s, field.name);
                 setLhs(s, field_ident, try appendType(s, field.type));
@@ -460,7 +458,6 @@ fn appendType(s: *InitType, comptime T: type) !Type.Index {
             inline for (info.fields) |field| {
                 const field_node = try appendNode(s, .field);
                 setLhs(s, field_node, try appendIdent(s, field.name));
-                setRhs(s, field_node, 0);
                 appendChild(s, node, tail, field_node);
                 tail = field_node;
             }
@@ -491,7 +488,6 @@ fn appendType(s: *InitType, comptime T: type) !Type.Index {
             var tail: Type.Index = 0;
             inline for (info.fields) |field| {
                 const field_node = try appendNode(s, .field);
-                setRhs(s, field_node, 0);
 
                 const field_ident = try appendIdent(s, field.name);
                 setLhs(s, field_ident, try appendType(s, field.type));
