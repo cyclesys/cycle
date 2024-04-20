@@ -2,8 +2,102 @@ const std = @import("std");
 
 pub const ByteList = extern struct {
     buf: [*]u8 = undefined,
-    len: u32,
+    len: u32 = 0,
     capacity: u32 = 0,
+
+    const max_capacity = std.math.maxInt(u32);
+
+    pub fn append(self: *ByteList, byte: u8) void {
+        self.buf[self.len] = byte;
+        self.len += 1;
+    }
+
+    pub fn appendSlice(self: *ByteList, bytes: []const u8) void {
+        @memcpy(self.buf[self.len..][0..bytes.len], bytes);
+        self.len += bytes.len;
+    }
+
+    pub fn insert(self: *ByteList, i: u32, byte: u8) void {
+        std.mem.copyBackwards(
+            u8,
+            self.buf[i + 1 .. self.len + 1],
+            self.buf[i..self.len],
+        );
+        self.buf[i] = byte;
+        self.len += 1;
+    }
+
+    pub fn insertSlice(self: *ByteList, i: u32, bytes: []const u8) void {
+        const dest_start = i + 1;
+        const dest_end = dest_start + bytes.len;
+        const src_start = i;
+        const src_end = i + bytes.len;
+        std.mem.copyBackwards(
+            u8,
+            self.buf[dest_start..dest_end],
+            self.buf[src_start..src_end],
+        );
+        @memcpy(self.buf[i..][0..bytes.len], bytes);
+        self.len += bytes.len;
+    }
+
+    pub fn remove(self: *ByteList, i: u32) void {
+        std.mem.copyForwards(
+            u8,
+            self.buf[i..self.len],
+            self.buf[i + 1 .. self.len],
+        );
+        self.len -= 1;
+    }
+
+    pub fn removeRange(self: *ByteList, start: u32, len: u32) void {
+        const dest_start = start;
+        const dest_end = dest_start + self.len;
+        const src_start = start + len;
+        const src_end = self.len;
+        std.mem.copyForwards(
+            u8,
+            self.buf[dest_start..dest_end],
+            self.buf[src_start..src_end],
+        );
+        self.len -= len;
+    }
+
+    pub fn ensureAvailable(self: *ByteList, allocator: std.mem.Allocator, necessary: u32) !void {
+        if ((self.capacity - self.len) < necessary) {
+            const necessary_capacity = self.len + necessary;
+            if (necessary_capacity > max_capacity) {
+                return error.OutOfCapacity;
+            }
+
+            var new_capacity = @max(self.capacity, 8);
+            while (new_capacity < necessary_capacity) {
+                new_capacity +|= new_capacity / 4 + 8;
+            }
+            try self.resize(allocator, new_capacity);
+        }
+    }
+
+    pub fn resize(self: *ByteList, allocator: std.mem.Allocator, new_capacity: u32) !void {
+        if (self.capacity == 0) {
+            self.buf = try allocator.alloc(u8, new_capacity);
+            self.capacity = new_capacity;
+            return;
+        }
+
+        const old_memory = self.buf[0..self.capacity];
+        if (allocator.resize(old_memory, new_capacity)) {
+            self.capacity = new_capacity;
+            return;
+        }
+        defer allocator.free(old_memory);
+
+        const new_memory = try allocator.alloc(u8, new_capacity);
+        @memcpy(new_memory[0..self.len], old_memory);
+        @memset(new_memory[self.len..], undefined);
+        self.buf = new_memory.ptr;
+        self.capacity = new_capacity;
+    }
 };
 
 /// A contigious growable list of items with a runtime known size.
@@ -80,7 +174,7 @@ pub fn List(comptime alignment: comptime_int) type {
 
         pub fn removeRange(self: *Self, start: Index, len: Index) void {
             const dest_start = start * self.item_size;
-            const dest_end = dest_start + (len * self.item_size);
+            const dest_end = dest_start + (self.len * self.item_size);
             const src_start = (start + len) * self.item_size;
             const src_end = self.len * self.item_size;
             std.mem.copyForwards(
