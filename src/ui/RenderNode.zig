@@ -7,7 +7,7 @@ robj: *rnd.Object,
 
 const std = @import("std");
 const rnd = @cImport({
-    @cInclude("render/render.h");
+    @cInclude("render.h");
 });
 const Root = @import("Root.zig");
 const Store = @import("../Store.zig");

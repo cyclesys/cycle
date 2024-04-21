@@ -7,7 +7,7 @@ data: []Node.Data = &.{},
 
 const std = @import("std");
 const rnd = @cImport({
-    @cInclude("render/render.h");
+    @cInclude("render.h");
 });
 const Store = @import("../Store.zig");
 const View = @This();

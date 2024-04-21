@@ -10,14 +10,14 @@ pub fn build(b: *std.Build) !void {
         .target = target,
         .optimize = optimize,
     });
-    exe.addIncludePath(.{ .path = "src/" });
+    exe.addIncludePath(.{ .path = "src/ui/render" });
     exe.addCSourceFiles(.{
         .files = &.{
-            "src/render/context.cc",
-            "src/render/internal.cc",
-            "src/render/object.cc",
-            "src/render/text.cc",
-            "src/render/window.cc",
+            "src/ui/render/context.cc",
+            "src/ui/render/internal.cc",
+            "src/ui/render/object.cc",
+            "src/ui/render/text.cc",
+            "src/ui/render/window.cc",
         },
         .flags = &.{
             "-std=c++17",

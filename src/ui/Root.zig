@@ -13,7 +13,7 @@ height: f32,
 const std = @import("std");
 const glfw = @import("glfw");
 const rnd = @cImport({
-    @cInclude("render/render.h");
+    @cInclude("render.h");
 });
 const Store = @import("../Store.zig");
 const Grid = @import("Grid.zig");
