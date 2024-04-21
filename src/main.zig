@@ -1,7 +1,16 @@
 const std = @import("std");
 const glfw = @import("glfw");
+const Root = @import("ui/Root.zig");
+const Store = @import("Store.zig");
+const sys = @import("system.zig");
 
-const Context = struct {};
+const Context = struct {
+    store: Store,
+    root: Root,
+    sys_state: *sys.State,
+
+    err: ?anyerror,
+};
 
 pub fn main() !void {
     glfw.setErrorCallback(onError);
@@ -33,6 +42,12 @@ pub fn main() !void {
     const ctx = try allocator.create(Context);
     defer allocator.destroy(ctx);
 
+    ctx.store = Store{};
+    ctx.root = try Root.init(allocator, window);
+    ctx.sys_state = try sys.init(allocator, &ctx.store, &ctx.root);
+    ctx.err = null;
+
+    window.setTitle("Cycle");
     window.setUserPointer(@ptrCast(ctx));
     window.setFramebufferSizeCallback(onFramebufferSize);
     window.setRefreshCallback(onRefresh);
@@ -46,6 +61,7 @@ pub fn main() !void {
 
     while (!window.shouldClose()) {
         glfw.pollEvents();
+        return ctx.err orelse continue;
     }
 }
 
@@ -62,7 +78,9 @@ fn onFramebufferSize(w: glfw.Window, width: u32, height: u32) void {
 
 fn onRefresh(w: glfw.Window) void {
     const ctx = w.getUserPointer(Context).?;
-    _ = ctx;
+    ctx.root.render() catch |e| {
+        ctx.err = e;
+    };
 }
 
 fn onKey(w: glfw.Window, key: glfw.Key, scancode: i32, action: glfw.Action, mods: glfw.Mods) void {
@@ -78,7 +96,12 @@ fn onChar(window: glfw.Window, codepoint: u21) void {
     _ = codepoint;
 }
 
-fn onMouseButton(window: glfw.Window, button: glfw.MouseButton, action: glfw.Action, mods: glfw.Mods) void {
+fn onMouseButton(
+    window: glfw.Window,
+    button: glfw.MouseButton,
+    action: glfw.Action,
+    mods: glfw.Mods,
+) void {
     _ = window;
     _ = button;
     _ = action;

@@ -74,13 +74,14 @@ pub fn addNode(
         .node = RenderNode{
             .view = .{},
             .children = .{},
+            .render_id = 0,
             .size = null,
             .robj = undefined,
         },
         .left = 0.0,
         .top = 0.0,
     };
-    try self.renderRootNode(allocator, store, obj_id, rn);
+    try self.renderNode(allocator, store, obj_id, rn);
 
     const size = rn.node.size.?;
     rn.left = (self.width - size.width) / 2;
@@ -93,7 +94,7 @@ pub fn addNode(
         size.width,
         size.height,
     );
-    try self.z_order.append(obj_id);
+    try self.z_order.append(allocator, obj_id);
 }
 
 pub fn updateNode(
@@ -114,33 +115,28 @@ fn renderNode(
     rn: *RootNode,
 ) !void {
     var ctx = RenderNode.RenderContext{
-        .root = self,
         .allocator = allocator,
+        .root = self,
         .store = store,
         .ops = .{},
         .children = .{},
-        .dirty = .{},
         .stack = .{},
     };
-    defer {
-        ctx.ops.deinit(allocator);
-        ctx.children.deinit(allocator);
-        ctx.stack.deinit(allocator);
-    }
+    defer ctx.deinit();
     try rn.node.render(&ctx, obj_id);
 }
 
-pub fn render(self: *Root) void {
+pub fn render(self: *Root) !void {
     rnd.beginFrame(self.rwnd);
     for (self.z_order.items) |id| {
         const rn = self.nodes.get(id).?;
         rnd.drawObject(self.rwnd, rn.node.robj, rnd.Rect{
             .size = rn.node.size.?,
             .offset = rnd.Offset{
-                .dx = rn.top,
-                .dy = rn.left,
+                .dx = rn.left,
+                .dy = rn.top,
             },
         });
     }
-    rnd.endFrame(self.rwnd);
+    if (!rnd.endFrame(self.rwnd)) return error.RenderError;
 }

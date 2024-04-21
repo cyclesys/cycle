@@ -31,6 +31,7 @@ pub fn BuildStack(comptime size: comptime_int) type {
         nodes: [size]View.NodeIndex = [_]View.NodeIndex{0} ** size,
         tails: [size]View.NodeIndex = [_]View.NodeIndex{0} ** size,
         len: std.math.IntFittingRange(0, size) = 0,
+
         const Self = @This();
 
         pub fn push(
@@ -211,7 +212,6 @@ pub fn clear(self: *View) void {
 }
 
 pub fn append(self: *View, allocator: std.mem.Allocator, data: TaggedData) !NodeIndex {
-    const old_ptr = @intFromPtr(self.nodes.bytes);
     const index: u32 = @intCast(self.nodes.len);
     try self.nodes.append(allocator, .{
         .tree = .{
@@ -223,10 +223,8 @@ pub fn append(self: *View, allocator: std.mem.Allocator, data: TaggedData) !Node
             inline else => |val, tag| @unionInit(Node.Data, @tagName(tag), val),
         },
     });
-    if (old_ptr != @intFromPtr(self.nodes.bytes)) {
-        const slice = self.nodes.slice();
-        self.tree = slice.items(.tree);
-        self.data = slice.items(.data);
-    }
+    const slice = self.nodes.slice();
+    self.tree = slice.items(.tree);
+    self.data = slice.items(.data);
     return index;
 }

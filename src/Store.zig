@@ -82,7 +82,7 @@ pub fn addType(self: *Store, allocator: std.mem.Allocator, name: []const u8, ty:
 
     const type_id = try self.types.put(allocator, StoreType{
         .type = ty,
-        .layut = try TypeLayout.init(allocator, ty),
+        .layout = try TypeLayout.init(allocator, ty),
     });
     try ids.append(allocator, type_id);
     return type_id;
@@ -97,7 +97,7 @@ pub fn addObject(self: *Store, allocator: std.mem.Allocator, source_id: ?Id, typ
         .data = data,
     });
     if (source_id) |sid| {
-        const source = self.sources.get(sid).?;
+        var source = self.sources.getPtr(sid).?;
         try source.append(allocator, object_id);
     }
     return object_id;

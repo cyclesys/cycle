@@ -23,6 +23,13 @@ pub const RenderContext = struct {
     // A stack of nodes that are currently being rendered.
     // This is used to detech any cycles.
     stack: std.AutoHashMapUnmanaged(Store.Id, void) = .{},
+
+    pub fn deinit(self: *RenderContext) void {
+        self.ops.deinit(self.allocator);
+        self.children.deinit(self.allocator);
+        self.stack.deinit(self.allocator);
+        self.* = undefined;
+    }
 };
 
 const RenderOp = struct {
@@ -59,21 +66,34 @@ pub fn deinit(self: *RenderNode, allocator: std.mem.Allocator) void {
     self.* = undefined;
 }
 
-pub fn render(self: *RenderNode, ctx: *RenderContext, obj_id: Store.Id) !void {
+const Error = anyerror;
+
+pub fn render(self: *RenderNode, ctx: *RenderContext, obj_id: Store.Id) Error!void {
     self.render_id = @addWithOverflow(self.render_id, 1)[0];
 
-    const op_start = ctx.ops.items.len;
-    try ctx.stack.put(ctx.allocator, obj_id, undefined);
-
+    // rebuild the view
     const obj = ctx.store.objects.get(obj_id).?;
-    const builder = ctx.builders.get(obj.type).?;
-
+    const builder = ctx.root.builders.get(obj.type).?;
     try builder.build(builder.ctx, ctx.allocator, &self.view, obj.data);
 
-    try self.layoutViewNode(ctx, 0);
+    // layout the view and build the op list
+    const op_start = ctx.ops.items.len;
+    try ctx.stack.put(ctx.allocator, obj_id, undefined);
+    const new_size = try self.layoutViewNode(ctx, 0);
+
+    // remove any children that were untouched during the layout process.
+    var iter = self.children.iterator();
+    while (iter.next()) |entry| {
+        if (entry.value_ptr.render_id != self.render_id) {
+            // this does not invalidate the iterator, it just sets the slot to 'empty'.
+            _ = self.children.remove(entry.key_ptr.*);
+        }
+    }
+
     const ops = ctx.ops.items[op_start..];
 
-    if (ops.len == 0 or sizeIsZero(ops[0].rect.size)) {
+    // ensure we actually have something to render
+    if (ops.len == 0 or sizeIsZero(new_size)) {
         if (self.size != null) {
             rnd.destroyObject(self.robj);
             self.robj = undefined;
@@ -82,23 +102,24 @@ pub fn render(self: *RenderNode, ctx: *RenderContext, obj_id: Store.Id) !void {
         return;
     }
 
-    const new_size = ops[0].rect.size;
+    // create/recreate the render object based on the size
     if (self.size) |old_size| {
-        if (new_size != old_size) {
+        if (!sizeEql(new_size, old_size)) {
             rnd.destroyObject(self.robj);
         }
-        self.robj = rnd.createObject(ctx.rwnd, new_size);
+        self.robj = rnd.createObject(ctx.root.rwnd, new_size).?;
     } else {
-        self.robj = rnd.createObject(ctx.rwnd, new_size);
+        self.robj = rnd.createObject(ctx.root.rwnd, new_size).?;
     }
     self.size = new_size;
 
+    // process the render ops
     rnd.beginDraw(self.robj);
     for (ctx.ops.items[op_start..]) |op| {
         switch (op.tag) {
             .rect => {
                 const data = self.view.data[op.node].rect;
-                rnd.drawRect(self.robj, op.rect, data.color);
+                rnd.drawRect(self.robj, op.rect, data.color.code);
             },
             .rrect => {
                 const data = self.view.data[op.node].rrect;
@@ -109,7 +130,7 @@ pub fn render(self: *RenderNode, ctx: *RenderContext, obj_id: Store.Id) !void {
                         .rx = data.radius.rx,
                         .ry = data.radius.ry,
                     },
-                    data.color,
+                    data.color.code,
                 );
             },
             .text => {
@@ -128,22 +149,14 @@ pub fn render(self: *RenderNode, ctx: *RenderContext, obj_id: Store.Id) !void {
             },
         }
     }
-    rnd.endDraw(self.robj);
+    if (!rnd.endDraw(self.robj)) return error.RenderError;
 
-    // remove any unused children
-    var iter = self.children.iterator();
-    while (iter.next()) |entry| {
-        if (entry.value_ptr.render_id != self.render_id) {
-            // this does not invalidate the iterator, it just sets the slot to 'empty'.
-            _ = self.children.remove(entry.key_ptr.*);
-        }
-    }
-
+    // cleanup
     ctx.ops.shrinkRetainingCapacity(op_start);
     _ = ctx.stack.remove(obj_id);
 }
 
-fn layoutViewNode(self: *RenderNode, ctx: *RenderContext, node: View.NodeIndex) !rnd.Size {
+fn layoutViewNode(self: *RenderNode, ctx: *RenderContext, node: View.NodeIndex) Error!rnd.Size {
     switch (self.view.tree[node].tag) {
         .row => {
             return self.layoutFlex(ctx, node, .row);
@@ -173,10 +186,18 @@ fn layoutViewNode(self: *RenderNode, ctx: *RenderContext, node: View.NodeIndex) 
         },
         .text => {
             const data = self.view.data[node].text;
-            const text = rnd.createText(ctx.rctx, rnd.Size{
-                .width = data.font_size * 80, // 80 character max column width
-                .height = std.math.maxInt(f32), // can be as large as needed
-            });
+            const text = rnd.createText(
+                ctx.root.rctx,
+                rnd.Size{
+                    .width = data.font_size * 80, // 80 character max column width
+                    .height = std.math.floatMax(f32), // can be as large as needed
+                },
+                rnd.ConstSlice{
+                    .ptr = @ptrCast(data.str.ptr),
+                    .len = data.str.len,
+                },
+                data.font_size,
+            );
             const text_rect = rnd.getTextRect(text);
             try ctx.ops.append(ctx.allocator, RenderOp{
                 .tag = .text,
@@ -216,7 +237,7 @@ inline fn layoutShape(
     ctx: *RenderContext,
     node: View.NodeIndex,
     comptime tag: RenderOp.Tag,
-) !rnd.Size {
+) Error!rnd.Size {
     const op_i = ctx.ops.items.len;
     try ctx.ops.append(ctx.allocator, RenderOp{
         .tag = tag,
@@ -244,7 +265,7 @@ inline fn layoutFlex(
     ctx: *RenderContext,
     node: View.NodeIndex,
     comptime axis: enum { column, row },
-) !void {
+) Error!rnd.Size {
     const data = switch (axis) {
         .column => self.view.data[node].column,
         .row => self.view.data[node].row,
@@ -262,7 +283,7 @@ inline fn layoutFlex(
             continue;
         }
 
-        try ctx.children.append(ctx.allocator, child_start);
+        try ctx.children.append(ctx.allocator, @intCast(child_start));
 
         switch (axis) {
             .column => {
@@ -308,7 +329,7 @@ inline fn layoutFlex(
                         op.rect.offset.dy += data.spacing;
                         offset += data.spacing;
                     }
-                    offset ++ op.rect.size.height;
+                    offset += op.rect.size.height;
                 },
                 .row => {
                     switch (data.cross_align) {
@@ -326,7 +347,7 @@ inline fn layoutFlex(
                         op.rect.offset.dx += data.spacing;
                         offset += data.spacing;
                     }
-                    offset ++ op.rect.size.width;
+                    offset += op.rect.size.width;
                 },
             }
         }
@@ -342,4 +363,9 @@ inline fn layoutFlex(
 
 inline fn sizeIsZero(size: rnd.Size) bool {
     return size.width == 0 or size.height == 0;
+}
+
+inline fn sizeEql(left: rnd.Size, right: rnd.Size) bool {
+    return left.width == right.width and
+        left.height == right.height;
 }

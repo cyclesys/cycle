@@ -75,6 +75,11 @@ pub fn LayoutList(comptime T: type) type {
         pub const Child = LayoutType(T.child);
         const Self = @This();
 
+        pub inline fn items(self: Self) []Child {
+            const slice: [*]Child = @ptrCast(@alignCast(self.inner.bytes));
+            return slice[0..self.inner.len];
+        }
+
         pub fn get(self: Self, i: u32) *Child {
             const bytes = self.inner.get(i);
             return @ptrCast(@alignCast(bytes));

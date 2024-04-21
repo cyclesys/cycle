@@ -86,8 +86,6 @@ pub fn insert(
 
     const node_index = try self.nodes.put(allocator, Node{
         .id = id,
-        .left = left,
-        .top = top,
     });
 
     for (first_row..(last_row + 1)) |ri| {

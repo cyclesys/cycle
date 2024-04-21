@@ -31,7 +31,7 @@ pub fn FreeList(comptime T: type) type {
 
             const index = self.list.items.len;
             try self.list.append(allocator, .{ .value = value });
-            return index;
+            return @intCast(index);
         }
 
         pub fn remove(self: *Self, i: u32) void {
