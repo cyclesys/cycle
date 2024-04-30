@@ -78,8 +78,6 @@ const SortField = struct {
     }
 };
 
-const ListType = raw.List(16);
-
 fn appendLayout(s: *InitState, type_node: Type.Index) std.mem.Allocator.Error!Index {
     switch (s.ty.tag[type_node]) {
         // Stored as its native type.
@@ -156,7 +154,7 @@ fn appendLayout(s: *InitState, type_node: Type.Index) std.mem.Allocator.Error!In
 
         // Stored as a `raw.List`.
         .list => {
-            const node = try appendNode(s, @sizeOf(ListType), @alignOf(ListType));
+            const node = try appendNode(s, @sizeOf(raw.List), @alignOf(raw.List));
             const child = try appendLayout(s, s.ty.data[type_node].lhs);
             setHead(s, node, child);
             return node;
@@ -381,8 +379,8 @@ test "fixed layouts" {
     try expectLayout(zig.Ref, .{ .size = @sizeOf(Store.Id), .alignment = @alignOf(Store.Id) });
     try expectLayout(zig.Str, .{ .size = @sizeOf(raw.ByteList), .alignment = @alignOf(raw.ByteList) });
     try expectLayout(zig.List(u8), .{
-        .size = @sizeOf(ListType),
-        .alignment = @alignOf(ListType),
+        .size = @sizeOf(raw.List),
+        .alignment = @alignOf(raw.List),
         .child = &.{ .size = 1, .alignment = 1 },
     });
 }

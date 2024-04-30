@@ -67,11 +67,11 @@ pub fn LayoutArray(comptime T: type) type {
 
 pub fn LayoutList(comptime T: type) type {
     return extern struct {
-        inner: InnerList = .{
+        inner: raw.List = .{
             .item_size = @sizeOf(Child),
+            .item_alignment = @alignOf(Child),
         },
 
-        const InnerList = raw.List(@alignOf(Child));
         pub const Child = LayoutType(T.child);
         const Self = @This();
 
@@ -106,14 +106,14 @@ pub fn LayoutList(comptime T: type) type {
             setRange(range, children);
         }
 
-        pub fn insert(self: *Self, allocator: std.mem.Allocator, i: InnerList.Index, child: Child) !void {
+        pub fn insert(self: *Self, allocator: std.mem.Allocator, i: raw.List.Index, child: Child) !void {
             try self.inner.ensureAvailable(allocator, 1);
             const bytes = self.inner.insert(i);
             const ptr: *Child = @ptrCast(@alignCast(bytes));
             ptr.* = child;
         }
 
-        pub fn insertRange(self: *Self, allocator: std.mem.Allocator, i: InnerList.Index, children: []const Child) !void {
+        pub fn insertRange(self: *Self, allocator: std.mem.Allocator, i: raw.List.Index, children: []const Child) !void {
             try self.inner.ensureAvailable(allocator, children.len);
             const range = self.inner.insertRange(i, children.len);
             setRange(range, children);
@@ -128,11 +128,11 @@ pub fn LayoutList(comptime T: type) type {
             }
         }
 
-        pub fn remove(self: *Self, i: InnerList.Index) !void {
+        pub fn remove(self: *Self, i: raw.List.Index) !void {
             self.inner.remove(i);
         }
 
-        pub fn removeRange(self: *Self, start: InnerList.Index, len: InnerList.Index) void {
+        pub fn removeRange(self: *Self, start: raw.List.Index, len: raw.List.Index) void {
             self.inner.removeRange(start, len);
         }
     };
